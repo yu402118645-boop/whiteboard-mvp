@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "whiteboard-mvp",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  // 前端构建产物（dist）作为静态资源；/api/* 先交给 Worker 处理，其余路径按单页应用回退到 index.html
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "BOARD", "class_name": "Board" }]
+  },
+  // 免费计划只能使用 SQLite 存储的 Durable Objects
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Board"] }]
+}

@@ -1,0 +1,137 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #fff;
+  color: #1b1b1f;
+}
+
+.board {
+  height: 100%;
+  position: relative;
+}
+
+.home {
+  max-width: 480px;
+  margin: 18vh auto 0;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.home h1 {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.home p {
+  color: #5b5b66;
+  line-height: 1.6;
+}
+
+.button {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 10px 22px;
+  border: 0;
+  border-radius: 8px;
+  background: #6965db;
+  color: #fff;
+  font-size: 16px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.error {
+  color: #c92a2a !important;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  white-space: nowrap;
+  background: #f1f0ff;
+}
+
+.status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-ok .dot {
+  background: #2f9e44;
+}
+
+.status-warn {
+  background: #fff4e6;
+}
+
+.status-warn .dot {
+  background: #f08c00;
+}
+
+.status-bad {
+  background: #ffe3e3;
+}
+
+.status-bad .dot {
+  background: #e03131;
+}
+
+.pending {
+  color: #c92a2a;
+}
+
+.share {
+  padding: 6px 10px;
+  border: 1px solid #d0d0dc;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.dialog {
+  text-align: center;
+  padding: 24px;
+}
+
+@media (max-width: 640px) {
+  .status {
+    font-size: 12px;
+  }
+  .share {
+    display: none;
+  }
+}
