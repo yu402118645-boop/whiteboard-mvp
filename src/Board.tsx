@@ -104,7 +104,11 @@ export function Board({ boardId }: { boardId: string }) {
   const [toast, setToast] = useState<string | null>(null);
   // 当前选中的 3D 体（用于「修改尺寸」）；solidDialog 为 null 表示面板关闭
   const [selectedSolid, setSelectedSolid] = useState<ReturnType<typeof findSelectedSolid>>(null);
-  const [solidDialog, setSolidDialog] = useState<{ spec: SolidSpec; editing: boolean } | null>(null);
+  const [solidDialog, setSolidDialog] = useState<{
+    spec: SolidSpec;
+    background: string;
+    editing: boolean;
+  } | null>(null);
   const initialData = useMemo(
     () => ({
       elements: loadCache(boardId),
@@ -341,10 +345,15 @@ export function Board({ boardId }: { boardId: string }) {
 
   const openSolidEditor = () => {
     const solid = currentSelectedSolid();
-    if (solid) setSolidDialog({ spec: currentSolidSpec(solid), editing: true });
+    if (solid) {
+      setSolidDialog({ spec: currentSolidSpec(solid), background: styleOf(solid.members).backgroundColor, editing: true });
+    }
   };
 
-  const insertSolid = (spec: SolidSpec) => {
+  const openSolidInserter = () =>
+    setSolidDialog({ spec: { type: "cube", ...DEFAULT_SIZE.cube }, background: DEFAULT_SOLID_BACKGROUND, editing: false });
+
+  const insertSolid = (spec: SolidSpec, background: string) => {
     setSolidDialog(null);
     if (!api) return;
     const appState = api.getAppState();
@@ -354,7 +363,12 @@ export function Board({ boardId }: { boardId: string }) {
     if (editing) {
       // 修改尺寸：在原位置重新生成，保留样式和外层分组，旧的标记为删除
       const [minX, minY] = getCommonBounds(editing.members);
-      elements = createSolidElements(spec, { x: minX, y: minY }, styleOf(editing.members), editing.groupId).map(
+      elements = createSolidElements(
+        spec,
+        { x: minX, y: minY },
+        { ...styleOf(editing.members), backgroundColor: background },
+        editing.groupId,
+      ).map(
         (el) => ({ ...el, groupIds: editing.members[0].groupIds }),
       );
       const old = new Set(editing.members.map((el) => el.id));
@@ -367,7 +381,7 @@ export function Board({ boardId }: { boardId: string }) {
       // 放在当前视野中央，样式沿用当前选中的线条设置，背景用半透明
       const style = {
         strokeColor: appState.currentItemStrokeColor,
-        backgroundColor: DEFAULT_SOLID_BACKGROUND,
+        backgroundColor: background,
         fillStyle: "solid" as const,
         strokeWidth: appState.currentItemStrokeWidth,
         roughness: appState.currentItemRoughness,
@@ -416,7 +430,7 @@ export function Board({ boardId }: { boardId: string }) {
             nickname={nickname}
             onRename={() => setDialog("rename")}
             onEditNickname={() => setDialog("nickname")}
-            onInsertSolid={() => setSolidDialog({ spec: { type: "cube", ...DEFAULT_SIZE.cube }, editing: false })}
+            onInsertSolid={openSolidInserter}
             onEditSolid={
               selectedSolid ? openSolidEditor : undefined
             }
@@ -426,7 +440,7 @@ export function Board({ boardId }: { boardId: string }) {
         <MainMenu>
           <MainMenu.Item onSelect={() => location.assign("/")}>所有白板</MainMenu.Item>
           <MainMenu.Item
-            onSelect={() => setSolidDialog({ spec: { type: "cube", ...DEFAULT_SIZE.cube }, editing: false })}
+            onSelect={openSolidInserter}
           >
             插入 3D 体
           </MainMenu.Item>
@@ -467,6 +481,7 @@ export function Board({ boardId }: { boardId: string }) {
       {solidDialog && (
         <SolidDialog
           initial={solidDialog.spec}
+          initialBackground={solidDialog.background}
           editing={solidDialog.editing}
           onConfirm={insertSolid}
           onCancel={() => setSolidDialog(null)}

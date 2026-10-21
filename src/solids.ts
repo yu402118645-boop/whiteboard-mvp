@@ -1,18 +1,23 @@
-// 3D 体：用 Excalidraw 原生的线条和椭圆拼出立方体、圆柱、圆锥（圆台）、棱锥（棱台）、球，并组合成一个整体。
+// 3D 体：用 Excalidraw 原生的线条和椭圆拼出立方体、棱柱、圆柱、圆锥（圆台）、棱锥（棱台）、球（半球），并组合成一个整体。
 // 因为是普通元素，线条颜色、背景、透明度、填充样式都能照常修改；
 // 尺寸记在 customData 里，选中后可以重新打开面板修改。
 
 import { convertToExcalidrawElements } from "@excalidraw/excalidraw";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 
-export type SolidType = "cube" | "cylinder" | "cone" | "pyramid" | "sphere";
-// cut：从顶部截掉的高度（圆锥、棱锥用），0 表示尖顶，大于 0 就成了圆台 / 棱台
+export type SolidType = "cube" | "prism" | "cylinder" | "cone" | "pyramid" | "sphere";
+// cut：圆锥、棱锥是从顶部截掉的高度（0 表示尖顶，大于 0 就成了圆台 / 棱台）；
+// 球是从底部切掉的高度（切掉一半就是半球）
 export type SolidSize = { w: number; h: number; d: number; cut?: number };
-// sides：棱锥底面的边数
-export type SolidSpec = { type: SolidType; sides?: 3 | 4 } & SolidSize;
+// sides：棱柱、棱锥底面的边数
+export type Sides = 3 | 4 | 5 | 6;
+export type SolidSpec = { type: SolidType; sides?: Sides } & SolidSize;
+export const SIDES: Sides[] = [3, 4, 5, 6];
+export const SIDES_LABELS: Record<Sides, string> = { 3: "三", 4: "四", 5: "五", 6: "六" };
 
 export const SOLID_LABELS: Record<SolidType, string> = {
   cube: "立方体",
+  prism: "棱柱",
   cylinder: "圆柱",
   cone: "圆锥",
   pyramid: "棱锥",
@@ -23,29 +28,40 @@ export const SOLID_LABELS: Record<SolidType, string> = {
 export function solidName(spec: SolidSpec): string {
   const cut = (spec.cut ?? 0) > 0;
   if (spec.type === "cone") return cut ? "圆台" : "圆锥";
-  if (spec.type === "pyramid") return `${spec.sides === 3 ? "三" : "四"}${cut ? "棱台" : "棱锥"}`;
+  const n = SIDES_LABELS[spec.sides ?? 4];
+  if (spec.type === "pyramid") return `${n}${cut ? "棱台" : "棱锥"}`;
+  if (spec.type === "prism") return `${n}棱柱`;
+  if (spec.type === "sphere" && cut) {
+    const twice = (spec.cut ?? 0) * 2;
+    return twice === spec.h ? "半球" : twice < spec.h ? "大半球" : "小半球";
+  }
   return SOLID_LABELS[spec.type];
 }
 
 // 每种 3D 体的三个尺寸分别叫什么
 export const SIZE_LABELS: Record<SolidType, [string, string, string]> = {
   cube: ["长", "高", "宽（进深）"],
+  prism: ["底面长", "高", "底面宽（进深）"],
   cylinder: ["直径", "高", "底面透视"],
   cone: ["底面直径", "高", "底面透视"],
   pyramid: ["底面长", "高", "底面宽（进深）"],
   sphere: ["宽", "高", "赤道透视"],
 };
 
-export const DEFAULT_SIZE: Record<SolidType, SolidSize & { sides?: 3 | 4 }> = {
+export const DEFAULT_SIZE: Record<SolidType, SolidSize & { sides?: Sides }> = {
   cube: { w: 120, h: 120, d: 120 },
+  prism: { w: 140, h: 160, d: 120, sides: 3 },
   cylinder: { w: 140, h: 160, d: 140 },
   cone: { w: 140, h: 160, d: 140, cut: 0 },
   pyramid: { w: 160, h: 160, d: 140, cut: 0, sides: 4 },
-  sphere: { w: 160, h: 160, d: 140 },
+  sphere: { w: 160, h: 160, d: 140, cut: 0 },
 };
 
-/** 支持截顶的类型 */
-export const CUTTABLE: SolidType[] = ["cone", "pyramid"];
+/** 支持截掉一部分的类型（圆锥、棱锥截顶，球切底） */
+export const CUTTABLE: SolidType[] = ["cone", "pyramid", "sphere"];
+
+/** 球切掉的高度不能超过直径，留一点免得只剩一片 */
+export const sphereCutMax = (h: number) => Math.max(0, Math.round(h) - 10);
 
 export const SIZE_MIN = 20;
 export const SIZE_MAX = 800;
@@ -128,8 +144,12 @@ export function solidParts(spec: SolidSpec): SolidPart[] {
     }
     case "pyramid":
       return polyhedronParts(pyramidFaces(w, h, d, spec.sides ?? 4, k));
+    case "prism":
+      return polyhedronParts(prismFaces(w, h, d, spec.sides ?? 3));
     case "sphere": {
       const ry = Math.max(2, d * ELLIPSE_FACTOR);
+      const bottomCut = Math.min(Math.max(0, spec.cut ?? 0), sphereCutMax(h));
+      if (bottomCut > 0) return domeParts(w, h, ry, bottomCut);
       return [
         { role: "face", kind: "ellipse", x: 0, y: 0, width: w, height: h },
         { role: "hidden", kind: "path", points: arc(w / 2, h / 2, w / 2, ry, Math.PI, 2 * Math.PI), closed: false, dashed: true },
@@ -141,12 +161,70 @@ export function solidParts(spec: SolidSpec): SolidPart[] {
 
 type Vec3 = [number, number, number];
 
+/**
+ * 球冠（切掉底部的球）：上面是球的轮廓弧，下面是切面椭圆的前半圈，
+ * 切面后半圈被挡住画虚线；赤道还在的话照常画出来。
+ */
+function domeParts(w: number, h: number, ry: number, bottomCut: number): SolidPart[] {
+  const cx = w / 2;
+  const cy = h / 2;
+  // 切面在球上的相对高度：-1 是顶，1 是底（y 向下）
+  const t = (h - bottomCut - cy) / cy;
+  const s = Math.sqrt(1 - t * t);
+  const yc = h - bottomCut;
+  const crx = cx * s;
+  const cry = Math.max(1, ry * s);
+  const a = Math.asin(t);
+  const outline = [...arc(cx, cy, cx, cy, Math.PI - a, 2 * Math.PI + a), ...arc(cx, yc, crx, cry, 0, Math.PI)];
+  const parts: SolidPart[] = [
+    { role: "hidden", kind: "path", points: arc(cx, yc, crx, cry, Math.PI, 2 * Math.PI), closed: false, dashed: true },
+    { role: "face", kind: "path", points: outline, closed: true, dashed: false },
+  ];
+  if (t > 0) {
+    parts.push(
+      { role: "hidden", kind: "path", points: arc(cx, cy, cx, ry, Math.PI, 2 * Math.PI), closed: false, dashed: true },
+      { role: "edge", kind: "path", points: arc(cx, cy, cx, ry, 0, Math.PI), closed: false, dashed: false },
+    );
+  }
+  // 赤道切掉了的话左右会缩进去，平移到以包围盒左上角为原点
+  const minX = Math.min(...parts.flatMap((part) => (part.kind === "path" ? part.points.map((p) => p[0]) : [])));
+  return parts.map((part) =>
+    part.kind === "path" ? { ...part, points: part.points.map(([x, y]) => [x - minX, y] as Point) } : part,
+  );
+}
+
+/**
+ * 底面多边形（y = 0 平面）：正多边形压缩到 w × d 的范围里，
+ * 最前面一条边和观察者平行，所以三棱是尖朝里的三角形，四棱就是长方形。
+ */
+function basePolygon(w: number, d: number, sides: Sides): Vec3[] {
+  const unit = Array.from({ length: sides }, (_, i) => {
+    const t = -Math.PI / 2 - Math.PI / sides + (2 * Math.PI * i) / sides;
+    return [Math.cos(t), Math.sin(t)];
+  });
+  const xs = unit.map((p) => p[0]);
+  const zs = unit.map((p) => p[1]);
+  const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
+  return unit.map(([x, z]) => [((x - x0) / (x1 - x0)) * w, 0, ((z - z0) / (z1 - z0)) * d]);
+}
+
+/** 棱柱的各个面：底面、顶面和一圈侧面 */
+function prismFaces(w: number, h: number, d: number, sides: Sides): Vec3[][] {
+  const base = basePolygon(w, d, sides);
+  const top: Vec3[] = base.map(([x, , z]) => [x, h, z]);
+  return [
+    base,
+    top,
+    ...base.map((p, i) => {
+      const j = (i + 1) % base.length;
+      return [p, base[j], top[j], top[i]];
+    }),
+  ];
+}
+
 /** 棱锥 / 棱台的各个面（三维坐标：x 向右，y 向上，z 向里） */
-function pyramidFaces(w: number, h: number, d: number, sides: 3 | 4, k: number): Vec3[][] {
-  const base: Vec3[] =
-    sides === 3
-      ? [[0, 0, 0], [w, 0, 0], [w / 2, 0, d]]
-      : [[0, 0, 0], [w, 0, 0], [w, 0, d], [0, 0, d]];
+function pyramidFaces(w: number, h: number, d: number, sides: Sides, k: number): Vec3[][] {
+  const base = basePolygon(w, d, sides);
   // 顶点在底面中心（三角形取重心）正上方
   const cx = base.reduce((sum, p) => sum + p[0], 0) / base.length;
   const cz = base.reduce((sum, p) => sum + p[2], 0) / base.length;
@@ -231,19 +309,33 @@ export function sizeHandles(spec: SolidSpec): { dim: "w" | "h" | "d"; at: Point;
       { dim: "d", at: [w + o, 0], axis: diagonal, factor: 2 },
     ];
   }
-  if (type === "pyramid") {
-    // 取各部分的包围盒：右下是长，顶部是高，右上是进深
+  if (type === "pyramid" || type === "prism") {
+    // 取各部分的包围盒：底面前边右端是长，顶部是高，右上是进深
     const points = solidParts(spec).flatMap((part) => (part.kind === "path" ? part.points : []));
     const maxX = Math.max(...points.map((p) => p[0]));
     const maxY = Math.max(...points.map((p) => p[1]));
+    const frontRight = Math.max(...points.filter((p) => Math.abs(p[1] - maxY) < 0.01).map((p) => p[0]));
     const o = d * DEPTH_FACTOR;
     return [
-      { dim: "w", at: [w, maxY], axis: [1, 0], factor: 1 },
+      { dim: "w", at: [frontRight, maxY], axis: [1, 0], factor: 1 },
       { dim: "h", at: [points.find((p) => p[1] === 0)![0], 0], axis: [0, -1], factor: 1 },
       { dim: "d", at: [maxX, maxY - o], axis: diagonal, factor: 2 },
     ];
   }
   const ry = d * ELLIPSE_FACTOR;
+  const bottomCut = type === "sphere" ? Math.min(spec.cut ?? 0, sphereCutMax(h)) : 0;
+  if (bottomCut > 0) {
+    // 球冠：左右手柄放在最宽处，进深手柄放在切面椭圆最下方
+    const points = solidParts(spec).flatMap((part) => (part.kind === "path" ? part.points : []));
+    const maxX = Math.max(...points.map((p) => p[0]));
+    const maxY = Math.max(...points.map((p) => p[1]));
+    const widest = points.reduce((best, p) => (p[0] > best[0] ? p : best));
+    return [
+      { dim: "w", at: [maxX, widest[1]], axis: [1, 0], factor: 1 },
+      { dim: "h", at: [maxX / 2, 0], axis: [0, -1], factor: 1 },
+      { dim: "d", at: [maxX / 2, maxY], axis: [0, 1], factor: 4 },
+    ];
+  }
   const k = (spec.cut ?? 0) / (h + (spec.cut ?? 0));
   const top = type === "cone" && k > 0 ? ry * k : 0;
   const bottom = type === "cylinder" ? ry + h : type === "cone" ? top + h : h / 2;
