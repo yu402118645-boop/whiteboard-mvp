@@ -3,6 +3,8 @@ import { DurableObject } from "cloudflare:workers";
 export interface Env {
   BOARD: DurableObjectNamespace<Board>;
   DIRECTORY: DurableObjectNamespace<Directory>;
+  // 仅用于本地测试时缩短备份间隔，例如 wrangler dev --var SNAPSHOT_INTERVAL_SECONDS:5
+  SNAPSHOT_INTERVAL_SECONDS?: string;
 }
 
 // Excalidraw 元素：只关心用于合并的字段，其余原样保存
@@ -16,7 +18,15 @@ type ClientMessage =
 // 每个连接附带的身份信息，休眠后也能恢复
 type Attachment = { cid: string; name: string };
 
-export type BoardSummary = { id: string; name: string; createdAt: string; lastOpenedAt: string | null };
+export type BoardSummary = {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastOpenedAt: string | null;
+  deletedAt: string | null;
+};
+
+export type SnapshotSummary = { id: number; createdAt: string; elementCount: number; editors: string[] };
 
 const BOARD_ID = /^[A-Za-z0-9_-]{6,64}$/;
 const FILE_ID = /^[A-Za-z0-9_-]{8,128}$/;
@@ -29,6 +39,13 @@ const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp
 // 免费计划每天只有 10 万行写入额度，这是最先会用完的一项
 const FLUSH_INTERVAL_MS = 5_000;
 const DEFAULT_BOARD_NAME = "未命名白板";
+// 自动备份：有修改时每 2 分钟存一份快照，每块白板保留最近 20 份
+const SNAPSHOT_INTERVAL_MS = 2 * 60_000;
+const SNAPSHOT_KEEP = 20;
+// 快照按块存储，单块不超过 SQLite 2 MB 的上限（中文每字符 3 字节）
+const SNAPSHOT_CHUNK_CHARS = 500_000;
+// 回收站里的白板保留 7 天
+const TRASH_RETENTION_MS = 7 * 24 * 3600_000;
 
 function newBoardId(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -77,6 +94,9 @@ export class Board extends DurableObject<Env> {
   private elements: Map<string, Element> | null = null;
   private dirty = new Set<string>();
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private snapshotTimer: ReturnType<typeof setTimeout> | undefined;
+  // 自上次快照以来做过修改的人
+  private editorsSinceSnapshot = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -101,6 +121,18 @@ export class Board extends DurableObject<Env> {
       data BLOB NOT NULL,
       created_at TEXT NOT NULL
     )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      element_count INTEGER NOT NULL,
+      editors TEXT NOT NULL
+    )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS snapshot_chunks (
+      snapshot_id INTEGER NOT NULL,
+      seq INTEGER NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY (snapshot_id, seq)
+    )`);
   }
 
   create(boardId: string, name: string): void {
@@ -116,26 +148,116 @@ export class Board extends DurableObject<Env> {
     this.broadcast(JSON.stringify({ type: "meta", name }));
   }
 
-  /** 删除白板：断开所有人，清空存储 */
+  /** 移到回收站：先保存好当前内容，再断开所有人 */
+  trash(): void {
+    if (!this.exists()) return;
+    this.flush();
+    this.takeSnapshot();
+    this.setMeta("deleted_at", new Date().toISOString());
+    this.kickAll("deleted");
+  }
+
+  restoreFromTrash(): void {
+    this.sql.exec(`DELETE FROM meta WHERE key = 'deleted_at'`);
+  }
+
+  /** 彻底删除：断开所有人，清空存储 */
   async destroy(): Promise<void> {
     clearTimeout(this.flushTimer);
+    clearTimeout(this.snapshotTimer);
     this.flushTimer = undefined;
+    this.snapshotTimer = undefined;
     this.dirty.clear();
+    this.editorsSinceSnapshot.clear();
     this.elements = null;
-    for (const ws of this.ctx.getWebSockets()) {
-      this.safeSend(ws, JSON.stringify({ type: "error", code: "not_found" }));
-      try {
-        ws.close(4404, "board deleted");
-      } catch {
-        // 已经关闭
-      }
-    }
+    this.kickAll("not_found");
     await this.ctx.storage.deleteAll();
     this.ensureSchema();
   }
 
+  private kickAll(code: "not_found" | "deleted"): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      this.safeSend(ws, JSON.stringify({ type: "error", code }));
+      try {
+        ws.close(4404, code);
+      } catch {
+        // 已经关闭
+      }
+    }
+  }
+
+  listSnapshots(): SnapshotSummary[] {
+    return this.sql
+      .exec<{ id: number; created_at: string; element_count: number; editors: string }>(
+        `SELECT id, created_at, element_count, editors FROM snapshots ORDER BY id DESC`,
+      )
+      .toArray()
+      .map((r) => ({ id: r.id, createdAt: r.created_at, elementCount: r.element_count, editors: JSON.parse(r.editors) }));
+  }
+
+  getSnapshot(id: number): Element[] | null {
+    const chunks = this.sql
+      .exec<{ data: string }>(`SELECT data FROM snapshot_chunks WHERE snapshot_id = ? ORDER BY seq`, id)
+      .toArray();
+    return chunks.length > 0 ? JSON.parse(chunks.map((c) => c.data).join("")) : null;
+  }
+
+  private scheduleSnapshot(): void {
+    if (this.snapshotTimer === undefined) {
+      const interval = Number(this.env.SNAPSHOT_INTERVAL_SECONDS) * 1000 || SNAPSHOT_INTERVAL_MS;
+      this.snapshotTimer = setTimeout(() => this.takeSnapshot(), interval);
+    }
+  }
+
+  /** 保存一份当前内容的快照（只在有修改时），并删除超出保留份数的旧快照 */
+  private takeSnapshot(): void {
+    clearTimeout(this.snapshotTimer);
+    this.snapshotTimer = undefined;
+    if (this.editorsSinceSnapshot.size === 0 || !this.elements) return;
+    const visible = [...this.elements.values()].filter((el) => !el.isDeleted);
+    const editors = [...this.editorsSinceSnapshot];
+    this.editorsSinceSnapshot.clear();
+    // 空白板不占用快照名额，免得“全删了”之后把有内容的旧快照挤掉
+    if (visible.length === 0) return;
+    const data = JSON.stringify(visible);
+    try {
+      this.ctx.storage.transactionSync(() => {
+        const { id } = this.sql
+          .exec<{ id: number }>(
+            `INSERT INTO snapshots (created_at, element_count, editors) VALUES (?, ?, ?) RETURNING id`,
+            new Date().toISOString(),
+            visible.length,
+            JSON.stringify(editors),
+          )
+          .one();
+        for (let seq = 0, start = 0; start < data.length; seq++) {
+          let end = Math.min(start + SNAPSHOT_CHUNK_CHARS, data.length);
+          // 不要把 emoji 等占两个 UTF-16 单元的字符切成两半
+          const last = data.charCodeAt(end - 1);
+          if (end < data.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+          this.sql.exec(
+            `INSERT INTO snapshot_chunks (snapshot_id, seq, data) VALUES (?, ?, ?)`,
+            id,
+            seq,
+            data.slice(start, end),
+          );
+          start = end;
+        }
+        const cutoff = this.sql
+          .exec<{ id: number }>(`SELECT id FROM snapshots ORDER BY id DESC LIMIT 1 OFFSET ?`, SNAPSHOT_KEEP - 1)
+          .toArray()[0];
+        if (cutoff) {
+          this.sql.exec(`DELETE FROM snapshot_chunks WHERE snapshot_id < ?`, cutoff.id);
+          this.sql.exec(`DELETE FROM snapshots WHERE id < ?`, cutoff.id);
+        }
+      });
+    } catch (err) {
+      console.error("snapshot failed", err);
+    }
+  }
+
   putFile(fileId: string, mimeType: string, data: ArrayBuffer): boolean {
-    if (!this.exists()) return false;
+    if (!this.exists() || this.isTrashed()) return false;
     this.sql.exec(
       `INSERT OR IGNORE INTO files (id, mime_type, data, created_at) VALUES (?, ?, ?, ?)`,
       fileId,
@@ -169,6 +291,10 @@ export class Board extends DurableObject<Env> {
     return this.getMeta("created_at") !== null;
   }
 
+  private isTrashed(): boolean {
+    return this.getMeta("deleted_at") !== null;
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected WebSocket", { status: 426 });
@@ -181,6 +307,11 @@ export class Board extends DurableObject<Env> {
       // 浏览器拿不到握手失败的状态码，所以先接受连接，再用消息说明原因
       server.send(JSON.stringify({ type: "error", code: "not_found" }));
       server.close(4404, "board not found");
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    if (this.isTrashed()) {
+      server.send(JSON.stringify({ type: "error", code: "deleted" }));
+      server.close(4404, "board in trash");
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -250,6 +381,8 @@ export class Board extends DurableObject<Env> {
     }
 
     if (accepted.length > 0) {
+      this.editorsSinceSnapshot.add((ws.deserializeAttachment() as Attachment).name);
+      this.scheduleSnapshot();
       this.broadcast(JSON.stringify({ type: "update", elements: accepted }), ws);
     }
     // 发送方的版本落后于服务器时，把服务器上的版本发回去，保证各端最终一致
@@ -330,7 +463,10 @@ export class Board extends DurableObject<Env> {
       // 已经关闭
     }
     this.broadcastPresence(ws);
-    if (this.openSockets(ws).length === 0) this.flush();
+    if (this.openSockets(ws).length === 0) {
+      this.flush();
+      this.takeSnapshot();
+    }
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
@@ -378,15 +514,35 @@ export class Directory extends DurableObject<Env> {
       created_at TEXT NOT NULL,
       last_opened_at TEXT
     )`);
+    // 回收站功能后加的列，老数据需要补上
+    const columns = this.sql.exec<{ name: string }>(`PRAGMA table_info(boards)`).toArray();
+    if (!columns.some((c) => c.name === "deleted_at")) {
+      this.sql.exec(`ALTER TABLE boards ADD COLUMN deleted_at TEXT`);
+    }
   }
 
   list(): BoardSummary[] {
     return this.sql
-      .exec<{ id: string; name: string; created_at: string; last_opened_at: string | null }>(
-        `SELECT id, name, created_at, last_opened_at FROM boards ORDER BY COALESCE(last_opened_at, created_at) DESC`,
+      .exec<{ id: string; name: string; created_at: string; last_opened_at: string | null; deleted_at: string | null }>(
+        `SELECT id, name, created_at, last_opened_at, deleted_at FROM boards
+         ORDER BY COALESCE(deleted_at, last_opened_at, created_at) DESC`,
       )
       .toArray()
-      .map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at, lastOpenedAt: r.last_opened_at }));
+      .map((r) => ({
+        id: r.id,
+        name: r.name,
+        createdAt: r.created_at,
+        lastOpenedAt: r.last_opened_at,
+        deletedAt: r.deleted_at,
+      }));
+  }
+
+  trash(id: string): void {
+    this.sql.exec(`UPDATE boards SET deleted_at = ? WHERE id = ?`, new Date().toISOString(), id);
+  }
+
+  restore(id: string): void {
+    this.sql.exec(`UPDATE boards SET deleted_at = NULL WHERE id = ?`, id);
   }
 
   add(id: string, name: string, createdAt: string): void {
@@ -467,7 +623,18 @@ export default {
     const path = url.pathname;
 
     if (path === "/api/boards") {
-      if (request.method === "GET") return json(await directory(env).list());
+      if (request.method === "GET") {
+        const all = await directory(env).list();
+        // 顺便清理回收站里超过 7 天的白板
+        const expired = all.filter((b) => b.deletedAt && Date.now() - Date.parse(b.deletedAt) > TRASH_RETENTION_MS);
+        for (const b of expired) {
+          ctx.waitUntil(board(env, b.id).destroy().then(() => directory(env).remove(b.id)));
+        }
+        return json({
+          boards: all.filter((b) => !b.deletedAt),
+          trash: all.filter((b) => b.deletedAt && !expired.includes(b)),
+        });
+      }
       if (request.method === "POST") {
         const id = newBoardId();
         const name = await readName(request);
@@ -491,11 +658,32 @@ export default {
         return json({ id, name });
       }
       if (request.method === "DELETE") {
-        await board(env, id).destroy();
-        await directory(env).remove(id);
+        if (url.searchParams.get("permanent") === "1") {
+          await board(env, id).destroy();
+          await directory(env).remove(id);
+        } else {
+          await board(env, id).trash();
+          await directory(env).trash(id);
+        }
         return json({ ok: true });
       }
       return json({ error: "method not allowed" }, 405);
+    }
+
+    if (rest === "/restore" && request.method === "POST") {
+      await board(env, id).restoreFromTrash();
+      await directory(env).restore(id);
+      return json({ ok: true });
+    }
+
+    if (rest === "/snapshots" && request.method === "GET") {
+      return json(await board(env, id).listSnapshots());
+    }
+
+    const snapshot = rest.match(/^\/snapshots\/(\d+)$/);
+    if (snapshot && request.method === "GET") {
+      const elements = await board(env, id).getSnapshot(Number(snapshot[1]));
+      return elements ? json(elements) : json({ error: "snapshot not found" }, 404);
     }
 
     if (rest === "/ws") {

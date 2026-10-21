@@ -12,7 +12,8 @@ import { BoardSync, type ConnectionStatus, type RemotePointer } from "./sync";
 import { StatusBadge } from "./StatusBadge";
 import { NameDialog } from "./NameDialog";
 import { clientId, getName, saveName } from "./identity";
-import { renameBoard } from "./api";
+import { getSnapshot, renameBoard, type SnapshotSummary } from "./api";
+import { HistoryDialog } from "./HistoryDialog";
 import { downloadFile, uploadFile } from "./files";
 
 // 本地也缓存一份，离线时刷新页面不丢修改，重连后再补发到服务器
@@ -42,7 +43,11 @@ const CACHE_THROTTLE_MS = 1000;
 const FILE_RETRY_MS = 2000;
 const FILE_MAX_RETRIES = 15;
 
-type Dialog = "nickname" | "rename" | null;
+type Dialog = "nickname" | "rename" | "history" | null;
+
+function randomNonce(): number {
+  return Math.floor(Math.random() * 2 ** 31);
+}
 
 export function Board({ boardId }: { boardId: string }) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null);
@@ -50,8 +55,17 @@ export function Board({ boardId }: { boardId: string }) {
   const [pending, setPending] = useState(0);
   const [nickname, setNickname] = useState(getName);
   const [boardName, setBoardName] = useState("");
-  const [dialog, setDialog] = useState<Dialog>(getName() ? null : "nickname");
-  const initialData = useMemo(() => ({ elements: loadCache(boardId), scrollToContent: true }), [boardId]);
+  const [dialog, setDialog] = useState<Dialog>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const initialData = useMemo(
+    () => ({
+      elements: loadCache(boardId),
+      // 箭头默认用肘形：自动走折线，适合画流程图
+      appState: { currentItemArrowType: "elbow" as const },
+      scrollToContent: true,
+    }),
+    [boardId],
+  );
 
   // 服务器已确认拥有的每个元素版本；本地版本与之不同的元素就是待发送的修改
   const syncedVersions = useRef(new Map<string, number>());
@@ -138,10 +152,8 @@ export function Board({ boardId }: { boardId: string }) {
     api?.updateScene({ collaborators: new Map(collaborators.current) });
   }, [api]);
 
-  // 先有昵称再连接，这样别人看到的光标一开始就带名字
-  const hasNickname = nickname !== "";
   useEffect(() => {
-    if (!api || !hasNickname) return;
+    if (!api) return;
     const sync = new BoardSync(boardId, { cid: clientId, name: getName() }, {
       onInit(elements, name) {
         // 每次（重新）连接都以服务器的完整快照为准，再把本地更新的部分补发上去
@@ -186,7 +198,7 @@ export function Board({ boardId }: { boardId: string }) {
       window.clearTimeout(sendTimer.current);
       window.clearTimeout(pointerTimer.current);
     };
-  }, [api, boardId, hasNickname, applyRemote, flush, updateCollaborators]);
+  }, [api, boardId, applyRemote, flush, updateCollaborators]);
 
   const onChange = useCallback(
     (elements: readonly ExcalidrawElement[], _appState: unknown, _files: BinaryFiles) => {
@@ -215,6 +227,41 @@ export function Board({ boardId }: { boardId: string }) {
     setNickname(name);
     syncRef.current?.setName(name);
     setDialog(null);
+  };
+
+  const showToast = (text: string) => {
+    setToast(text);
+    window.setTimeout(() => setToast(null), 4000);
+  };
+
+  // 恢复备份：快照里的图形以更高的版本号写回，快照里没有的图形标记为删除，
+  // 这样会作为一次普通修改同步给所有人，也能用撤销退回去
+  const restoreSnapshot = async (snapshot: SnapshotSummary) => {
+    setDialog(null);
+    if (!api) return;
+    try {
+      const restored = await getSnapshot<ExcalidrawElement>(boardId, snapshot.id);
+      const current = new Map(api.getSceneElementsIncludingDeleted().map((el) => [el.id, el]));
+      const restoredIds = new Set(restored.map((el) => el.id));
+      const now = Date.now();
+      const next: ExcalidrawElement[] = restored.map((el) => ({
+        ...el,
+        isDeleted: false,
+        version: Math.max(el.version, current.get(el.id)?.version ?? 0) + 1,
+        versionNonce: randomNonce(),
+        updated: now,
+      }));
+      for (const el of current.values()) {
+        if (restoredIds.has(el.id)) continue;
+        next.push(
+          el.isDeleted ? el : { ...el, isDeleted: true, version: el.version + 1, versionNonce: randomNonce(), updated: now },
+        );
+      }
+      api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+      showToast("已恢复。按 Ctrl+Z 可以撤销");
+    } catch (err) {
+      window.alert(`恢复失败：${(err as Error).message}`);
+    }
   };
 
   const changeBoardName = async (name: string) => {
@@ -249,6 +296,7 @@ export function Board({ boardId }: { boardId: string }) {
       >
         <MainMenu>
           <MainMenu.Item onSelect={() => location.assign("/")}>所有白板</MainMenu.Item>
+          <MainMenu.Item onSelect={() => setDialog("history")}>历史版本（自动备份）</MainMenu.Item>
           <MainMenu.Item onSelect={() => setDialog("rename")}>重命名白板</MainMenu.Item>
           <MainMenu.Item onSelect={() => setDialog("nickname")}>修改我的昵称</MainMenu.Item>
           <MainMenu.Separator />
@@ -263,11 +311,11 @@ export function Board({ boardId }: { boardId: string }) {
       </Excalidraw>
       {dialog === "nickname" && (
         <NameDialog
-          title="你的昵称"
-          hint="其他人会在你的鼠标旁边看到这个名字。浏览器会记住它，下次不用再填。"
+          title="修改我的昵称"
+          hint="其他人会在你的鼠标旁边看到这个名字。浏览器会记住它，以后进任何白板都用这个名字。"
           initial={nickname}
           onConfirm={changeNickname}
-          onCancel={hasNickname ? () => setDialog(null) : undefined}
+          onCancel={() => setDialog(null)}
         />
       )}
       {dialog === "rename" && (
@@ -277,6 +325,21 @@ export function Board({ boardId }: { boardId: string }) {
           onConfirm={changeBoardName}
           onCancel={() => setDialog(null)}
         />
+      )}
+      {dialog === "history" && (
+        <HistoryDialog boardId={boardId} onRestore={restoreSnapshot} onClose={() => setDialog(null)} />
+      )}
+      {toast && <div className="toast">{toast}</div>}
+      {status.kind === "deleted" && (
+        <div className="overlay">
+          <div className="dialog">
+            <h2>这块白板已被移到回收站</h2>
+            <p>7 天内可以在首页的回收站里恢复。</p>
+            <a className="button" href="/">
+              去首页
+            </a>
+          </div>
+        </div>
       )}
       {status.kind === "not_found" && (
         <div className="overlay">

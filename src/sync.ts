@@ -4,7 +4,8 @@ export type ConnectionStatus =
   | { kind: "connecting"; attempt: number }
   | { kind: "connected"; peers: number; latencyMs: number | null }
   | { kind: "offline"; retryAt: number }
-  | { kind: "not_found" };
+  | { kind: "not_found" }
+  | { kind: "deleted" };
 
 type SyncedElement = { id: string; version: number; versionNonce: number };
 
@@ -154,9 +155,9 @@ export class BoardSync {
           this.handlers.onBoardName(message.name);
           break;
         case "error":
-          if (message.code === "not_found") {
+          if (message.code === "not_found" || message.code === "deleted") {
             this.notFound = true;
-            this.handlers.onStatus({ kind: "not_found" });
+            this.handlers.onStatus({ kind: message.code });
           }
           break;
       }

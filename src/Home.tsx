@@ -1,8 +1,19 @@
 import { useEffect, useState } from "react";
-import { createBoard, deleteBoard, listBoards, renameBoard, type BoardSummary } from "./api";
+import { createBoard, deleteBoard, listBoards, renameBoard, restoreBoard, type BoardSummary } from "./api";
 import { NameDialog } from "./NameDialog";
 
-type Dialog = { kind: "create" } | { kind: "rename"; board: BoardSummary } | { kind: "delete"; board: BoardSummary } | null;
+type Dialog =
+  | { kind: "create" }
+  | { kind: "rename"; board: BoardSummary }
+  | { kind: "delete"; board: BoardSummary }
+  | { kind: "purge"; board: BoardSummary }
+  | null;
+
+const TRASH_DAYS = 7;
+
+function daysLeft(deletedAt: string): number {
+  return Math.max(0, Math.ceil(TRASH_DAYS - (Date.now() - Date.parse(deletedAt)) / 86_400_000));
+}
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -10,13 +21,18 @@ function formatTime(iso: string): string {
 
 export function Home() {
   const [boards, setBoards] = useState<BoardSummary[] | null>(null);
+  const [trash, setTrash] = useState<BoardSummary[]>([]);
+  const [showTrash, setShowTrash] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = () =>
     listBoards()
-      .then(setBoards)
+      .then((res) => {
+        setBoards(res.boards);
+        setTrash(res.trash);
+      })
       .catch((err) => setError(`加载白板列表失败：${(err as Error).message}`));
 
   useEffect(() => {
@@ -69,6 +85,42 @@ export function Home() {
         </ul>
       )}
 
+      {trash.length > 0 && (
+        <>
+          <h2 className="section">
+            <button className="link-button" onClick={() => setShowTrash(!showTrash)}>
+              {showTrash ? "▾" : "▸"} 回收站（{trash.length}）
+            </button>
+          </h2>
+          {showTrash && (
+            <ul className="list">
+              {trash.map((board) => (
+                <li key={board.id}>
+                  <span className="entry">
+                    <span className="title">{board.name}</span>
+                    <span className="time">{daysLeft(board.deletedAt!)} 天后自动彻底删除</span>
+                  </span>
+                  <button
+                    className="link-button"
+                    onClick={() => run(() => restoreBoard(board.id).then(refresh), "恢复失败")}
+                    disabled={busy}
+                  >
+                    恢复
+                  </button>
+                  <button
+                    className="link-button danger"
+                    onClick={() => setDialog({ kind: "purge", board })}
+                    disabled={busy}
+                  >
+                    彻底删除
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+
       {dialog?.kind === "create" && (
         <NameDialog
           title="新建白板"
@@ -95,7 +147,7 @@ export function Home() {
         <div className="overlay" onClick={() => setDialog(null)}>
           <div className="dialog card" onClick={(e) => e.stopPropagation()}>
             <h2>删除「{dialog.board.name}」？</h2>
-            <p className="muted">白板里的所有内容和图片都会被永久删除，正在使用的人会被断开。这个操作无法撤销。</p>
+            <p className="muted">白板会移到回收站，{TRASH_DAYS} 天内可以恢复。正在使用的人会被断开。</p>
             <div className="actions">
               <button className="button secondary" onClick={() => setDialog(null)}>
                 取消
@@ -105,6 +157,25 @@ export function Home() {
                 onClick={() => run(() => deleteBoard(dialog.board.id).then(refresh), "删除失败")}
               >
                 删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {dialog?.kind === "purge" && (
+        <div className="overlay" onClick={() => setDialog(null)}>
+          <div className="dialog card" onClick={(e) => e.stopPropagation()}>
+            <h2>彻底删除「{dialog.board.name}」？</h2>
+            <p className="muted">白板里的所有内容、图片和历史版本都会被永久删除，无法恢复。</p>
+            <div className="actions">
+              <button className="button secondary" onClick={() => setDialog(null)}>
+                取消
+              </button>
+              <button
+                className="button danger"
+                onClick={() => run(() => deleteBoard(dialog.board.id, true).then(refresh), "删除失败")}
+              >
+                彻底删除
               </button>
             </div>
           </div>

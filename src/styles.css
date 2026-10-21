@@ -235,3 +235,51 @@ body {
 .link-button.danger {
   color: #e03131;
 }
+
+.history {
+  max-width: 440px;
+  width: calc(100vw - 32px);
+  box-sizing: border-box;
+}
+
+.snapshots {
+  max-height: 50vh;
+  overflow-y: auto;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.snapshots li label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  border-bottom: 1px solid #ececf2;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.home h2.section {
+  margin-top: 36px;
+  font-size: 16px;
+  text-align: left;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%);
+  z-index: 100;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: #1b1b1f;
+  color: #fff;
+  font-size: 14px;
+}
+
+.home .list .entry {
+  flex: 1;
+  min-width: 0;
+}

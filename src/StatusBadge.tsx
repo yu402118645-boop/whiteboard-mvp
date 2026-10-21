@@ -57,6 +57,10 @@ export function StatusBadge({
       tone = "bad";
       label = "白板不存在";
       break;
+    case "deleted":
+      tone = "bad";
+      label = "白板已在回收站";
+      break;
   }
 
   return (
@@ -69,7 +73,7 @@ export function StatusBadge({
       <span className={`status status-${tone}`} title="与服务器的连接状态；连上后显示在线人数和网络延迟">
         <span className="dot" />
         {label}
-        {pending > 0 && status.kind !== "not_found" && <span className="pending">，{pending} 处修改待同步</span>}
+        {pending > 0 && status.kind !== "not_found" && status.kind !== "deleted" && <span className="pending">，{pending} 处修改待同步</span>}
       </span>
       {nickname && (
         <button className="chip" onClick={onEditNickname} title="点击修改昵称">
