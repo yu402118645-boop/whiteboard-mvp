@@ -283,3 +283,102 @@ body {
   flex: 1;
   min-width: 0;
 }
+
+.solid-dialog {
+  width: min(380px, calc(100vw - 32px));
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.segmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #f1f0f5;
+}
+
+.segmented button {
+  flex: 1;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.segmented button.active {
+  background: #fff;
+  color: #6965db;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.solid-preview {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  border-radius: 8px;
+  background: #f8f9fa;
+  touch-action: none;
+}
+
+.solid-preview polyline,
+.solid-preview ellipse {
+  fill: none;
+  stroke: #1e1e1e;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.solid-preview .solid-face {
+  fill: rgba(165, 216, 255, 0.5);
+}
+
+.solid-preview .solid-hidden {
+  stroke-dasharray: 6 5;
+}
+
+.solid-handle {
+  fill: #6965db;
+  stroke: #fff;
+  stroke-width: 2;
+  cursor: grab;
+}
+
+.solid-handle:active {
+  cursor: grabbing;
+}
+
+.solid-tip {
+  margin: 6px 0 4px;
+  font-size: 13px;
+}
+
+.solid-slider {
+  display: grid;
+  grid-template-columns: 76px 1fr 64px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+.solid-slider input[type="number"] {
+  width: 100%;
+  margin: 0;
+  padding: 4px 6px;
+}
+
+.solid-edit {
+  background: #f1f0ff !important;
+  color: #6965db;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .solid-edit {
+    display: inline-block;
+  }
+}

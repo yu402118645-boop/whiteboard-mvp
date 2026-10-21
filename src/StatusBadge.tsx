@@ -8,6 +8,7 @@ export function StatusBadge({
   nickname,
   onRename,
   onEditNickname,
+  onEditSolid,
 }: {
   status: ConnectionStatus;
   pending: number;
@@ -15,6 +16,8 @@ export function StatusBadge({
   nickname: string;
   onRename(): void;
   onEditNickname(): void;
+  // 选中 3D 体时才有
+  onEditSolid?: () => void;
 }) {
   const [now, setNow] = useState(Date.now());
   const [copied, setCopied] = useState(false);
@@ -65,6 +68,11 @@ export function StatusBadge({
 
   return (
     <div className="topbar">
+      {onEditSolid && (
+        <button className="chip solid-edit" onClick={onEditSolid}>
+          修改 3D 尺寸
+        </button>
+      )}
       {boardName && (
         <button className="chip board-name" onClick={onRename} title="点击重命名白板">
           {boardName}

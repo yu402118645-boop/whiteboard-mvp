@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CaptureUpdateAction,
   Excalidraw,
+  getCommonBounds,
   MainMenu,
   reconcileElements,
   useHandleLibrary,
 } from "@excalidraw/excalidraw";
 import type {
+  AppState,
   BinaryFileData,
   BinaryFiles,
   Collaborator,
@@ -22,6 +24,15 @@ import { getSnapshot, renameBoard, type SnapshotSummary } from "./api";
 import { HistoryDialog } from "./HistoryDialog";
 import { downloadFile, uploadFile } from "./files";
 import { libraryAdapter } from "./library";
+import { SolidDialog } from "./SolidDialog";
+import {
+  createSolidElements,
+  DEFAULT_SIZE,
+  DEFAULT_SOLID_BACKGROUND,
+  findSelectedSolid,
+  styleOf,
+  type SolidSpec,
+} from "./solids";
 
 // 本地也缓存一份，离线时刷新页面不丢修改，重连后再补发到服务器
 const cacheKey = (boardId: string) => `whiteboard:${boardId}`;
@@ -64,6 +75,9 @@ export function Board({ boardId }: { boardId: string }) {
   const [boardName, setBoardName] = useState("");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // 当前选中的 3D 体（用于「修改尺寸」）；solidDialog 为 null 表示面板关闭
+  const [selectedSolid, setSelectedSolid] = useState<ReturnType<typeof findSelectedSolid>>(null);
+  const [solidDialog, setSolidDialog] = useState<{ spec: SolidSpec; editing: boolean } | null>(null);
   const initialData = useMemo(
     () => ({
       elements: loadCache(boardId),
@@ -216,7 +230,11 @@ export function Board({ boardId }: { boardId: string }) {
   }, [api, boardId, applyRemote, flush, updateCollaborators]);
 
   const onChange = useCallback(
-    (elements: readonly ExcalidrawElement[], _appState: unknown, _files: BinaryFiles) => {
+    (elements: readonly ExcalidrawElement[], appState: AppState, _files: BinaryFiles) => {
+      const solid = findSelectedSolid(elements, appState.selectedElementIds);
+      setSelectedSolid((prev) =>
+        prev?.groupId === solid?.groupId && prev?.members.length === solid?.members.length ? prev : solid,
+      );
       if (sendTimer.current === undefined) sendTimer.current = window.setTimeout(flush, SEND_THROTTLE_MS);
       window.clearTimeout(cacheTimer.current);
       cacheTimer.current = window.setTimeout(() => saveCache(boardId, elements), CACHE_THROTTLE_MS);
@@ -279,6 +297,51 @@ export function Board({ boardId }: { boardId: string }) {
     }
   };
 
+  const insertSolid = (spec: SolidSpec) => {
+    setSolidDialog(null);
+    if (!api) return;
+    const appState = api.getAppState();
+    const editing = solidDialog?.editing ? selectedSolid : null;
+    let elements: ExcalidrawElement[];
+    let existing = api.getSceneElementsIncludingDeleted() as ExcalidrawElement[];
+    if (editing) {
+      // 修改尺寸：在原位置重新生成，保留样式和外层分组，旧的标记为删除
+      const [minX, minY] = getCommonBounds(editing.members);
+      elements = createSolidElements(spec, { x: minX, y: minY }, styleOf(editing.members), editing.groupId).map(
+        (el) => ({ ...el, groupIds: editing.members[0].groupIds }),
+      );
+      const old = new Set(editing.members.map((el) => el.id));
+      existing = existing.map((el) =>
+        old.has(el.id)
+          ? { ...el, isDeleted: true, version: el.version + 1, versionNonce: Math.floor(Math.random() * 2 ** 31) }
+          : el,
+      );
+    } else {
+      // 放在当前视野中央，样式沿用当前选中的线条设置，背景用半透明
+      const style = {
+        strokeColor: appState.currentItemStrokeColor,
+        backgroundColor: DEFAULT_SOLID_BACKGROUND,
+        fillStyle: "solid" as const,
+        strokeWidth: appState.currentItemStrokeWidth,
+        roughness: appState.currentItemRoughness,
+        opacity: appState.currentItemOpacity,
+      };
+      const [, , maxX, maxY] = getCommonBounds(createSolidElements(spec, { x: 0, y: 0 }, style));
+      const centerX = -appState.scrollX + appState.width / 2 / appState.zoom.value;
+      const centerY = -appState.scrollY + appState.height / 2 / appState.zoom.value;
+      elements = createSolidElements(spec, { x: centerX - maxX / 2, y: centerY - maxY / 2 }, style);
+    }
+    const groupId = elements[0].groupIds[0];
+    api.updateScene({
+      elements: [...existing, ...elements],
+      appState: {
+        selectedElementIds: Object.fromEntries(elements.map((el) => [el.id, true as const])),
+        selectedGroupIds: { [groupId]: true },
+      },
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+    });
+  };
+
   const changeBoardName = async (name: string) => {
     setDialog(null);
     try {
@@ -306,11 +369,19 @@ export function Board({ boardId }: { boardId: string }) {
             nickname={nickname}
             onRename={() => setDialog("rename")}
             onEditNickname={() => setDialog("nickname")}
+            onEditSolid={
+              selectedSolid ? () => setSolidDialog({ spec: selectedSolid.spec, editing: true }) : undefined
+            }
           />
         )}
       >
         <MainMenu>
           <MainMenu.Item onSelect={() => location.assign("/")}>所有白板</MainMenu.Item>
+          <MainMenu.Item
+            onSelect={() => setSolidDialog({ spec: { type: "cube", ...DEFAULT_SIZE.cube }, editing: false })}
+          >
+            插入 3D 体
+          </MainMenu.Item>
           <MainMenu.Item onSelect={() => setDialog("history")}>历史版本（自动备份）</MainMenu.Item>
           <MainMenu.Item onSelect={() => setDialog("rename")}>重命名白板</MainMenu.Item>
           <MainMenu.Item onSelect={() => setDialog("nickname")}>修改我的昵称</MainMenu.Item>
@@ -345,6 +416,14 @@ export function Board({ boardId }: { boardId: string }) {
         <HistoryDialog boardId={boardId} onRestore={restoreSnapshot} onClose={() => setDialog(null)} />
       )}
       {toast && <div className="toast">{toast}</div>}
+      {solidDialog && (
+        <SolidDialog
+          initial={solidDialog.spec}
+          editing={solidDialog.editing}
+          onConfirm={insertSolid}
+          onCancel={() => setSolidDialog(null)}
+        />
+      )}
       {status.kind === "deleted" && (
         <div className="overlay">
           <div className="dialog">
