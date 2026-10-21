@@ -1,10 +1,14 @@
 import { useRef, useState } from "react";
 import {
+  CUT_MAX,
+  CUTTABLE,
   DEFAULT_SIZE,
   SIZE_LABELS,
   SIZE_MAX,
   SIZE_MIN,
   SOLID_LABELS,
+  sizeHandles,
+  solidName,
   solidParts,
   type SolidSize,
   type SolidSpec,
@@ -14,10 +18,15 @@ import {
 const PREVIEW_W = 300;
 const PREVIEW_H = 240;
 const PAD = 24;
-const TYPES: SolidType[] = ["cube", "cylinder", "cone", "sphere"];
+const TYPES: SolidType[] = ["cube", "cylinder", "cone", "pyramid", "sphere"];
 type Dim = keyof SolidSize;
 
-const clamp = (v: number) => Math.round(Math.min(SIZE_MAX, Math.max(SIZE_MIN, v)));
+// 截掉高度可以是 0（尖顶），其余尺寸至少 SIZE_MIN
+const range = (dim: Dim): [number, number] => (dim === "cut" ? [0, CUT_MAX] : [SIZE_MIN, SIZE_MAX]);
+const clamp = (dim: Dim, v: number) => {
+  const [min, max] = range(dim);
+  return Math.round(Math.min(max, Math.max(min, v)));
+};
 
 function bounds(spec: SolidSpec) {
   let maxX = 0;
@@ -60,25 +69,26 @@ export function SolidDialog({
 
   // 输入框里正在编辑的文字：允许暂时不合法（比如想输 50 时先敲出的 5），合法时才更新预览
   const [drafts, setDrafts] = useState<Partial<Record<Dim, string>>>({});
-  const parseSize = (text: string) => {
+  const parseSize = (dim: Dim, text: string) => {
     const value = Number(text);
-    return /^\d+$/.test(text.trim()) && value >= SIZE_MIN && value <= SIZE_MAX ? value : null;
+    const [min, max] = range(dim);
+    return /^\d+$/.test(text.trim()) && value >= min && value <= max ? value : null;
   };
-  const invalid = (Object.keys(drafts) as Dim[]).filter((dim) => parseSize(drafts[dim]!) === null);
+  const invalid = (Object.keys(drafts) as Dim[]).filter((dim) => parseSize(dim, drafts[dim]!) === null);
 
   const setDim = (dim: Dim, value: number) => {
-    setSpec((prev) => ({ ...prev, [dim]: clamp(value) }));
+    setSpec((prev) => ({ ...prev, [dim]: clamp(dim, value) }));
     setDrafts(({ [dim]: _, ...rest }) => rest);
   };
 
   const typeDim = (dim: Dim, text: string) => {
     setDrafts((prev) => ({ ...prev, [dim]: text }));
-    const value = parseSize(text);
+    const value = parseSize(dim, text);
     if (value !== null) setSpec((prev) => ({ ...prev, [dim]: value }));
   };
 
   const finishTyping = (dim: Dim) => {
-    if (drafts[dim] !== undefined && parseSize(drafts[dim]!) !== null) {
+    if (drafts[dim] !== undefined && parseSize(dim, drafts[dim]!) !== null) {
       setDrafts(({ [dim]: _, ...rest }) => rest);
     }
   };
@@ -87,32 +97,12 @@ export function SolidDialog({
     if (invalid.length === 0) onConfirm(spec);
   };
 
-  // 三个手柄：右边拖长/直径，上边拖高，进深手柄（立方体在右上角斜着拖，圆形在底部上下拖）
-  // axis 是屏幕上的拖动方向，factor 是拖动 1 像素对应尺寸变化多少（未除以缩放）
-  const { w, h, d, type } = spec;
-  const o = d * (Math.SQRT1_2 / 2);
-  const ry = d * 0.25;
-  const handles: { dim: Dim; at: readonly [number, number]; axis: [number, number]; factor: number }[] =
-    type === "cube"
-      ? [
-          { dim: "w", at: P(w, o + h / 2), axis: [1, 0], factor: 1 },
-          { dim: "h", at: P(w / 2, o), axis: [0, -1], factor: 1 },
-          { dim: "d", at: P(w + o, 0), axis: [Math.SQRT1_2, -Math.SQRT1_2], factor: 2 },
-        ]
-      : [
-          { dim: "w", at: P(w, type === "cylinder" ? ry + h / 2 : type === "cone" ? h : h / 2), axis: [1, 0], factor: 1 },
-          { dim: "h", at: P(w / 2, 0), axis: [0, -1], factor: 1 },
-          {
-            dim: "d",
-            at: P(w / 2, type === "cylinder" ? h + 2 * ry : type === "cone" ? h + ry : h / 2 + ry),
-            axis: [0, 1],
-            factor: 4,
-          },
-        ];
+  // 三个手柄：右边拖长/直径，上边拖高，进深手柄（方形的在右上角斜着拖，圆形的在底部上下拖）
+  const handles = sizeHandles(spec).map((handle) => ({ ...handle, at: P(...handle.at) }));
 
   const onPointerDown = (dim: Dim) => (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
-    drag.current = { dim, startX: e.clientX, startY: e.clientY, start: spec[dim], scale: s };
+    drag.current = { dim, startX: e.clientX, startY: e.clientY, start: spec[dim] ?? 0, scale: s };
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const current = drag.current;
@@ -128,13 +118,13 @@ export function SolidDialog({
     drag.current = null;
   };
 
-  const labels = SIZE_LABELS[spec.type];
-  const dims: Dim[] = ["w", "h", "d"];
+  const labels = [...SIZE_LABELS[spec.type], "顶部截掉的高度"];
+  const dims: Dim[] = CUTTABLE.includes(spec.type) ? ["w", "h", "d", "cut"] : ["w", "h", "d"];
 
   return (
     <div className="overlay" onClick={onCancel}>
       <div className="dialog card solid-dialog" onClick={(e) => e.stopPropagation()}>
-        <h2>{editing ? `修改${SOLID_LABELS[spec.type]}尺寸` : "插入 3D 体"}</h2>
+        <h2>{editing ? `修改${solidName(spec)}尺寸` : "插入 3D 体"}</h2>
         {!editing && (
           <div className="segmented">
             {TYPES.map((type) => (
@@ -147,6 +137,19 @@ export function SolidDialog({
                 }}
               >
                 {SOLID_LABELS[type]}
+              </button>
+            ))}
+          </div>
+        )}
+        {spec.type === "pyramid" && (
+          <div className="segmented sub">
+            {([3, 4] as const).map((sides) => (
+              <button
+                key={sides}
+                className={(spec.sides ?? 4) === sides ? "active" : ""}
+                onClick={() => setSpec((prev) => ({ ...prev, sides }))}
+              >
+                {sides === 3 ? "三棱" : "四棱"}
               </button>
             ))}
           </div>
@@ -191,23 +194,26 @@ export function SolidDialog({
             </circle>
           ))}
         </svg>
-        <p className="muted solid-tip">拖动预览图上的圆点，或者拖下面的滑块。</p>
+        <p className="muted solid-tip">
+          拖动预览图上的圆点，或者拖下面的滑块。
+          {CUTTABLE.includes(spec.type) && "「顶部截掉的高度」大于 0 时变成台体。"}
+        </p>
         {dims.map((dim, i) => (
           <div key={dim}>
             <label className="solid-slider">
               <span>{labels[i]}</span>
               <input
                 type="range"
-                min={SIZE_MIN}
-                max={SIZE_MAX}
-                value={spec[dim]}
+                min={range(dim)[0]}
+                max={range(dim)[1]}
+                value={spec[dim] ?? 0}
                 onChange={(e) => setDim(dim, Number(e.target.value))}
               />
               <input
                 type="text"
                 inputMode="numeric"
                 className={invalid.includes(dim) ? "invalid" : ""}
-                value={drafts[dim] ?? String(spec[dim])}
+                value={drafts[dim] ?? String(spec[dim] ?? 0)}
                 onChange={(e) => typeDim(dim, e.target.value)}
                 onBlur={() => finishTyping(dim)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -215,7 +221,7 @@ export function SolidDialog({
             </label>
             {invalid.includes(dim) && (
               <p className="field-error">
-                请输入 {SIZE_MIN}～{SIZE_MAX} 之间的整数
+                请输入 {range(dim)[0]}～{range(dim)[1]} 之间的整数
               </p>
             )}
           </div>

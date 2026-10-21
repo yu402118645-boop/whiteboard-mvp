@@ -1,38 +1,55 @@
-// 3D 体：用 Excalidraw 原生的线条和椭圆拼出立方体、圆柱、圆锥、球，并组合成一个整体。
+// 3D 体：用 Excalidraw 原生的线条和椭圆拼出立方体、圆柱、圆锥（圆台）、棱锥（棱台）、球，并组合成一个整体。
 // 因为是普通元素，线条颜色、背景、透明度、填充样式都能照常修改；
 // 尺寸记在 customData 里，选中后可以重新打开面板修改。
 
 import { convertToExcalidrawElements } from "@excalidraw/excalidraw";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 
-export type SolidType = "cube" | "cylinder" | "cone" | "sphere";
-export type SolidSize = { w: number; h: number; d: number };
-export type SolidSpec = { type: SolidType } & SolidSize;
+export type SolidType = "cube" | "cylinder" | "cone" | "pyramid" | "sphere";
+// cut：从顶部截掉的高度（圆锥、棱锥用），0 表示尖顶，大于 0 就成了圆台 / 棱台
+export type SolidSize = { w: number; h: number; d: number; cut?: number };
+// sides：棱锥底面的边数
+export type SolidSpec = { type: SolidType; sides?: 3 | 4 } & SolidSize;
 
 export const SOLID_LABELS: Record<SolidType, string> = {
   cube: "立方体",
   cylinder: "圆柱",
   cone: "圆锥",
+  pyramid: "棱锥",
   sphere: "球",
 };
+
+/** 具体名称：截了顶的圆锥叫圆台，棱锥分三棱锥 / 四棱台等 */
+export function solidName(spec: SolidSpec): string {
+  const cut = (spec.cut ?? 0) > 0;
+  if (spec.type === "cone") return cut ? "圆台" : "圆锥";
+  if (spec.type === "pyramid") return `${spec.sides === 3 ? "三" : "四"}${cut ? "棱台" : "棱锥"}`;
+  return SOLID_LABELS[spec.type];
+}
 
 // 每种 3D 体的三个尺寸分别叫什么
 export const SIZE_LABELS: Record<SolidType, [string, string, string]> = {
   cube: ["长", "高", "宽（进深）"],
   cylinder: ["直径", "高", "底面透视"],
   cone: ["底面直径", "高", "底面透视"],
+  pyramid: ["底面长", "高", "底面宽（进深）"],
   sphere: ["宽", "高", "赤道透视"],
 };
 
-export const DEFAULT_SIZE: Record<SolidType, SolidSize> = {
-  cube: { w: 160, h: 120, d: 120 },
+export const DEFAULT_SIZE: Record<SolidType, SolidSize & { sides?: 3 | 4 }> = {
+  cube: { w: 120, h: 120, d: 120 },
   cylinder: { w: 140, h: 160, d: 140 },
-  cone: { w: 140, h: 160, d: 140 },
+  cone: { w: 140, h: 160, d: 140, cut: 0 },
+  pyramid: { w: 160, h: 160, d: 140, cut: 0, sides: 4 },
   sphere: { w: 160, h: 160, d: 140 },
 };
 
+/** 支持截顶的类型 */
+export const CUTTABLE: SolidType[] = ["cone", "pyramid"];
+
 export const SIZE_MIN = 20;
 export const SIZE_MAX = 800;
+export const CUT_MAX = 800;
 
 // 半透明的浅蓝背景：叠在一起的面和背面的虚线都能透出来，立体感更强
 export const DEFAULT_SOLID_BACKGROUND = "#a5d8ff80";
@@ -58,7 +75,11 @@ function arc(cx: number, cy: number, rx: number, ry: number, from: number, to: n
 }
 
 /** 3D 体的各个部分，坐标以包围盒左上角为原点；先画的在下层 */
-export function solidParts({ type, w, h, d }: SolidSpec): SolidPart[] {
+export function solidParts(spec: SolidSpec): SolidPart[] {
+  const { type, w, h, d } = spec;
+  // 截顶比例：顶面尺寸 / 底面尺寸。按「完整锥体高 = 可见高度 + 截掉高度」的相似三角形计算
+  const cut = Math.max(0, spec.cut ?? 0);
+  const k = cut / (h + cut);
   switch (type) {
     case "cube": {
       const o = d * DEPTH_FACTOR;
@@ -88,12 +109,25 @@ export function solidParts({ type, w, h, d }: SolidSpec): SolidPart[] {
     case "cone": {
       const rx = w / 2;
       const ry = Math.max(2, d * ELLIPSE_FACTOR);
-      const apex: Point = [rx, 0];
+      if (k === 0) {
+        const apex: Point = [rx, 0];
+        return [
+          { role: "hidden", kind: "path", points: arc(rx, h, rx, ry, Math.PI, 2 * Math.PI), closed: false, dashed: true },
+          { role: "face", kind: "path", points: [apex, ...arc(rx, h, rx, ry, Math.PI, 0)], closed: true, dashed: false },
+        ];
+      }
+      // 圆台：顶面是缩小的椭圆，侧面由底面前半弧和顶面前半弧围成
+      const tx = rx * k;
+      const ty = Math.max(1, ry * k);
+      const body = [...arc(rx, ty + h, rx, ry, Math.PI, 0), ...arc(rx, ty, tx, ty, 0, Math.PI)];
       return [
-        { role: "hidden", kind: "path", points: arc(rx, h, rx, ry, Math.PI, 2 * Math.PI), closed: false, dashed: true },
-        { role: "face", kind: "path", points: [apex, ...arc(rx, h, rx, ry, Math.PI, 0)], closed: true, dashed: false },
+        { role: "hidden", kind: "path", points: arc(rx, ty + h, rx, ry, Math.PI, 2 * Math.PI), closed: false, dashed: true },
+        { role: "face", kind: "path", points: body, closed: true, dashed: false },
+        { role: "face", kind: "ellipse", x: rx - tx, y: 0, width: tx * 2, height: ty * 2 },
       ];
     }
+    case "pyramid":
+      return polyhedronParts(pyramidFaces(w, h, d, spec.sides ?? 4, k));
     case "sphere": {
       const ry = Math.max(2, d * ELLIPSE_FACTOR);
       return [
@@ -103,6 +137,121 @@ export function solidParts({ type, w, h, d }: SolidSpec): SolidPart[] {
       ];
     }
   }
+}
+
+type Vec3 = [number, number, number];
+
+/** 棱锥 / 棱台的各个面（三维坐标：x 向右，y 向上，z 向里） */
+function pyramidFaces(w: number, h: number, d: number, sides: 3 | 4, k: number): Vec3[][] {
+  const base: Vec3[] =
+    sides === 3
+      ? [[0, 0, 0], [w, 0, 0], [w / 2, 0, d]]
+      : [[0, 0, 0], [w, 0, 0], [w, 0, d], [0, 0, d]];
+  // 顶点在底面中心（三角形取重心）正上方
+  const cx = base.reduce((sum, p) => sum + p[0], 0) / base.length;
+  const cz = base.reduce((sum, p) => sum + p[2], 0) / base.length;
+  if (k === 0) {
+    const apex: Vec3 = [cx, h, cz];
+    return [base, ...base.map((p, i) => [p, base[(i + 1) % base.length], apex])];
+  }
+  const top: Vec3[] = base.map(([x, , z]) => [cx + (x - cx) * k, h, cz + (z - cz) * k]);
+  return [
+    base,
+    top,
+    ...base.map((p, i) => {
+      const j = (i + 1) % base.length;
+      return [p, base[j], top[j], top[i]];
+    }),
+  ];
+}
+
+/**
+ * 通用多面体画法：朝向观察者的面画成填充的多边形，
+ * 只属于背面的棱画成虚线。观察方向与立方体一致（从右上前方看）。
+ */
+function polyhedronParts(faces: Vec3[][]): SolidPart[] {
+  const project = ([x, y, z]: Vec3): Point => [x + z * DEPTH_FACTOR, -y - z * DEPTH_FACTOR];
+  // 斜二测投影的投射方向；面的外法线和它点积为负就是朝向观察者
+  const view: Vec3 = [-DEPTH_FACTOR, -DEPTH_FACTOR, 1];
+  const all = faces.flat();
+  const center = all.reduce<Vec3>((c, p) => [c[0] + p[0] / all.length, c[1] + p[1] / all.length, c[2] + p[2] / all.length], [0, 0, 0]);
+  const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+  const visible = faces.map((face) => {
+    let normal = cross(sub(face[1], face[0]), sub(face[2], face[0]));
+    const faceCenter = face.reduce<Vec3>((c, p) => [c[0] + p[0] / face.length, c[1] + p[1] / face.length, c[2] + p[2] / face.length], [0, 0, 0]);
+    if (dot(normal, sub(faceCenter, center)) < 0) normal = [-normal[0], -normal[1], -normal[2]];
+    return dot(normal, view) < -1e-9;
+  });
+
+  const key = (a: Vec3, b: Vec3) => [a, b].map((p) => p.map((v) => v.toFixed(3)).join(",")).sort().join("|");
+  const visibleEdges = new Set<string>();
+  const hiddenEdges = new Map<string, [Vec3, Vec3]>();
+  faces.forEach((face, i) => {
+    face.forEach((p, j) => {
+      const q = face[(j + 1) % face.length];
+      if (visible[i]) visibleEdges.add(key(p, q));
+      else hiddenEdges.set(key(p, q), [p, q]);
+    });
+  });
+
+  // 统一平移到以包围盒左上角为原点
+  const projected = all.map(project);
+  const minX = Math.min(...projected.map((p) => p[0]));
+  const minY = Math.min(...projected.map((p) => p[1]));
+  const P = (p: Vec3): Point => {
+    const [x, y] = project(p);
+    return [x - minX, y - minY];
+  };
+
+  const parts: SolidPart[] = [];
+  for (const [k, [a, b]] of hiddenEdges) {
+    if (!visibleEdges.has(k)) parts.push({ role: "hidden", kind: "path", points: [P(a), P(b)], closed: false, dashed: true });
+  }
+  faces.forEach((face, i) => {
+    if (visible[i]) parts.push({ role: "face", kind: "path", points: face.map(P), closed: true, dashed: false });
+  });
+  return parts;
+}
+
+/**
+ * 插入面板预览图上三个拖动手柄的位置（局部坐标）和拖动方向。
+ * axis 是屏幕上的拖动方向，factor 是沿该方向拖动 1 个单位时尺寸变化多少。
+ */
+export function sizeHandles(spec: SolidSpec): { dim: "w" | "h" | "d"; at: Point; axis: Point; factor: number }[] {
+  const { type, w, h, d } = spec;
+  const diagonal: Point = [Math.SQRT1_2, -Math.SQRT1_2];
+  if (type === "cube") {
+    const o = d * DEPTH_FACTOR;
+    return [
+      { dim: "w", at: [w, o + h / 2], axis: [1, 0], factor: 1 },
+      { dim: "h", at: [w / 2, o], axis: [0, -1], factor: 1 },
+      { dim: "d", at: [w + o, 0], axis: diagonal, factor: 2 },
+    ];
+  }
+  if (type === "pyramid") {
+    // 取各部分的包围盒：右下是长，顶部是高，右上是进深
+    const points = solidParts(spec).flatMap((part) => (part.kind === "path" ? part.points : []));
+    const maxX = Math.max(...points.map((p) => p[0]));
+    const maxY = Math.max(...points.map((p) => p[1]));
+    const o = d * DEPTH_FACTOR;
+    return [
+      { dim: "w", at: [w, maxY], axis: [1, 0], factor: 1 },
+      { dim: "h", at: [points.find((p) => p[1] === 0)![0], 0], axis: [0, -1], factor: 1 },
+      { dim: "d", at: [maxX, maxY - o], axis: diagonal, factor: 2 },
+    ];
+  }
+  const ry = d * ELLIPSE_FACTOR;
+  const k = (spec.cut ?? 0) / (h + (spec.cut ?? 0));
+  const top = type === "cone" && k > 0 ? ry * k : 0;
+  const bottom = type === "cylinder" ? ry + h : type === "cone" ? top + h : h / 2;
+  return [
+    { dim: "w", at: [w, type === "sphere" ? h / 2 : type === "cylinder" ? ry + h / 2 : bottom], axis: [1, 0], factor: 1 },
+    { dim: "h", at: [w / 2, 0], axis: [0, -1], factor: 1 },
+    { dim: "d", at: [w / 2, bottom + ry], axis: [0, 1], factor: 4 },
+  ];
 }
 
 export type SolidStyle = {
@@ -133,7 +282,7 @@ export function createSolidElements(
     groupIds: [groupId],
   };
   const skeletons = solidParts(spec).map((part) => {
-    const customData = { solid: { type: spec.type, w: spec.w, h: spec.h, d: spec.d }, role: part.role };
+    const customData = { solid: { ...spec }, role: part.role };
     const filled = part.role === "face";
     const fill = {
       backgroundColor: filled ? style.backgroundColor : "transparent",
