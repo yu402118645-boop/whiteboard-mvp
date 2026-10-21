@@ -67,8 +67,13 @@ export function Board({ boardId }: { boardId: string }) {
   const initialData = useMemo(
     () => ({
       elements: loadCache(boardId),
-      // 箭头默认用肘形：自动走折线，适合画流程图
-      appState: { currentItemArrowType: "elbow" as const },
+      appState: {
+        // 箭头默认用肘形：自动走折线，适合画流程图
+        currentItemArrowType: "elbow" as const,
+        // 图形默认白色实心背景，叠在别的东西上时不会透出来
+        currentItemBackgroundColor: "#ffffff",
+        currentItemFillStyle: "solid" as const,
+      },
       scrollToContent: true,
     }),
     [boardId],
