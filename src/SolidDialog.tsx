@@ -58,7 +58,34 @@ export function SolidDialog({
   const oy = (PREVIEW_H - maxY * s) / 2;
   const P = (x: number, y: number) => [ox + x * s, oy + y * s] as const;
 
-  const setDim = (dim: Dim, value: number) => setSpec((prev) => ({ ...prev, [dim]: clamp(value) }));
+  // 输入框里正在编辑的文字：允许暂时不合法（比如想输 50 时先敲出的 5），合法时才更新预览
+  const [drafts, setDrafts] = useState<Partial<Record<Dim, string>>>({});
+  const parseSize = (text: string) => {
+    const value = Number(text);
+    return /^\d+$/.test(text.trim()) && value >= SIZE_MIN && value <= SIZE_MAX ? value : null;
+  };
+  const invalid = (Object.keys(drafts) as Dim[]).filter((dim) => parseSize(drafts[dim]!) === null);
+
+  const setDim = (dim: Dim, value: number) => {
+    setSpec((prev) => ({ ...prev, [dim]: clamp(value) }));
+    setDrafts(({ [dim]: _, ...rest }) => rest);
+  };
+
+  const typeDim = (dim: Dim, text: string) => {
+    setDrafts((prev) => ({ ...prev, [dim]: text }));
+    const value = parseSize(text);
+    if (value !== null) setSpec((prev) => ({ ...prev, [dim]: value }));
+  };
+
+  const finishTyping = (dim: Dim) => {
+    if (drafts[dim] !== undefined && parseSize(drafts[dim]!) !== null) {
+      setDrafts(({ [dim]: _, ...rest }) => rest);
+    }
+  };
+
+  const submit = () => {
+    if (invalid.length === 0) onConfirm(spec);
+  };
 
   // 三个手柄：右边拖长/直径，上边拖高，进深手柄（立方体在右上角斜着拖，圆形在底部上下拖）
   // axis 是屏幕上的拖动方向，factor 是拖动 1 像素对应尺寸变化多少（未除以缩放）
@@ -114,7 +141,10 @@ export function SolidDialog({
               <button
                 key={type}
                 className={type === spec.type ? "active" : ""}
-                onClick={() => setSpec({ type, ...DEFAULT_SIZE[type] })}
+                onClick={() => {
+                  setSpec({ type, ...DEFAULT_SIZE[type] });
+                  setDrafts({});
+                }}
               >
                 {SOLID_LABELS[type]}
               </button>
@@ -163,29 +193,38 @@ export function SolidDialog({
         </svg>
         <p className="muted solid-tip">拖动预览图上的圆点，或者拖下面的滑块。</p>
         {dims.map((dim, i) => (
-          <label key={dim} className="solid-slider">
-            <span>{labels[i]}</span>
-            <input
-              type="range"
-              min={SIZE_MIN}
-              max={SIZE_MAX}
-              value={spec[dim]}
-              onChange={(e) => setDim(dim, Number(e.target.value))}
-            />
-            <input
-              type="number"
-              min={SIZE_MIN}
-              max={SIZE_MAX}
-              value={spec[dim]}
-              onChange={(e) => setDim(dim, Number(e.target.value))}
-            />
-          </label>
+          <div key={dim}>
+            <label className="solid-slider">
+              <span>{labels[i]}</span>
+              <input
+                type="range"
+                min={SIZE_MIN}
+                max={SIZE_MAX}
+                value={spec[dim]}
+                onChange={(e) => setDim(dim, Number(e.target.value))}
+              />
+              <input
+                type="text"
+                inputMode="numeric"
+                className={invalid.includes(dim) ? "invalid" : ""}
+                value={drafts[dim] ?? String(spec[dim])}
+                onChange={(e) => typeDim(dim, e.target.value)}
+                onBlur={() => finishTyping(dim)}
+                onKeyDown={(e) => e.key === "Enter" && submit()}
+              />
+            </label>
+            {invalid.includes(dim) && (
+              <p className="field-error">
+                请输入 {SIZE_MIN}～{SIZE_MAX} 之间的整数
+              </p>
+            )}
+          </div>
         ))}
         <div className="actions">
           <button className="button secondary" onClick={onCancel}>
             取消
           </button>
-          <button className="button" onClick={() => onConfirm(spec)}>
+          <button className="button" onClick={submit} disabled={invalid.length > 0}>
             {editing ? "确定" : "插入"}
           </button>
         </div>

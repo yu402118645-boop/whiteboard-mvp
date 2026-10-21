@@ -365,7 +365,7 @@ body {
   font-size: 14px;
 }
 
-.solid-slider input[type="number"] {
+.solid-slider input[type="text"] {
   width: 100%;
   margin: 0;
   padding: 4px 6px;
@@ -381,4 +381,16 @@ body {
   .solid-edit {
     display: inline-block;
   }
+}
+
+.solid-slider input.invalid {
+  border-color: #e03131;
+  outline-color: #e03131;
+}
+
+.field-error {
+  margin: 2px 0 0;
+  text-align: right;
+  color: #e03131;
+  font-size: 12px;
 }
