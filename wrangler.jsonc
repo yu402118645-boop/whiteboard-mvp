@@ -13,8 +13,14 @@
     "run_worker_first": ["/api/*"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "BOARD", "class_name": "Board" }]
+    "bindings": [
+      { "name": "BOARD", "class_name": "Board" },
+      { "name": "DIRECTORY", "class_name": "Directory" }
+    ]
   },
   // 免费计划只能使用 SQLite 存储的 Durable Objects
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Board"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Board"] },
+    { "tag": "v2", "new_sqlite_classes": ["Directory"] }
+  ]
 }

@@ -8,15 +8,31 @@ export type ConnectionStatus =
 
 type SyncedElement = { id: string; version: number; versionNonce: number };
 
+export type PresenceUser = { cid: string; name: string };
+
+export type RemotePointer = {
+  cid: string;
+  name: string;
+  x: number;
+  y: number;
+  tool: "pointer" | "laser";
+  button: "up" | "down";
+};
+
 type ServerMessage =
-  | { type: "init"; elements: SyncedElement[] }
+  | { type: "init"; name: string; elements: SyncedElement[] }
   | { type: "update"; elements: SyncedElement[] }
-  | { type: "presence"; count: number }
+  | { type: "presence"; users: PresenceUser[] }
+  | ({ type: "pointer" } & RemotePointer)
+  | { type: "meta"; name: string }
   | { type: "error"; code: string };
 
 export interface SyncHandlers {
-  onInit(elements: SyncedElement[]): void;
+  onInit(elements: SyncedElement[], boardName: string): void;
   onRemoteUpdate(elements: SyncedElement[]): void;
+  onPresence(users: PresenceUser[]): void;
+  onPointer(pointer: RemotePointer): void;
+  onBoardName(name: string): void;
   onStatus(status: ConnectionStatus): void;
 }
 
@@ -42,6 +58,7 @@ export class BoardSync {
 
   constructor(
     private boardId: string,
+    private identity: { cid: string; name: string },
     private handlers: SyncHandlers,
   ) {
     window.addEventListener("online", this.reconnectNow);
@@ -60,6 +77,18 @@ export class BoardSync {
     return true;
   }
 
+  sendPointer(pointer: Omit<RemotePointer, "cid" | "name">): void {
+    if (!this.ready || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "pointer", ...pointer }));
+  }
+
+  setName(name: string): void {
+    this.identity = { ...this.identity, name };
+    if (this.ready && this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "profile", name }));
+    }
+  }
+
   dispose(): void {
     this.stopped = true;
     window.removeEventListener("online", this.reconnectNow);
@@ -74,7 +103,10 @@ export class BoardSync {
     this.handlers.onStatus({ kind: "connecting", attempt: this.attempt });
 
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${location.host}/api/boards/${encodeURIComponent(this.boardId)}/ws`);
+    const query = new URLSearchParams({ cid: this.identity.cid, name: this.identity.name });
+    const ws = new WebSocket(
+      `${protocol}//${location.host}/api/boards/${encodeURIComponent(this.boardId)}/ws?${query}`,
+    );
     this.ws = ws;
 
     this.connectTimer = window.setTimeout(() => ws.close(), CONNECT_TIMEOUT_MS);
@@ -104,15 +136,22 @@ export class BoardSync {
         case "init":
           this.ready = true;
           this.attempt = 0;
-          this.handlers.onInit(message.elements);
+          this.handlers.onInit(message.elements, message.name);
           this.emitConnected();
           break;
         case "update":
           this.handlers.onRemoteUpdate(message.elements);
           break;
         case "presence":
-          this.peers = message.count;
+          this.peers = message.users.length;
+          this.handlers.onPresence(message.users);
           if (this.ready) this.emitConnected();
+          break;
+        case "pointer":
+          this.handlers.onPointer(message);
+          break;
+        case "meta":
+          this.handlers.onBoardName(message.name);
           break;
         case "error":
           if (message.code === "not_found") {

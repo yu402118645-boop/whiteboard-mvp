@@ -1,7 +1,21 @@
 import { useEffect, useState } from "react";
 import type { ConnectionStatus } from "./sync";
 
-export function StatusBadge({ status, pending }: { status: ConnectionStatus; pending: number }) {
+export function StatusBadge({
+  status,
+  pending,
+  boardName,
+  nickname,
+  onRename,
+  onEditNickname,
+}: {
+  status: ConnectionStatus;
+  pending: number;
+  boardName: string;
+  nickname: string;
+  onRename(): void;
+  onEditNickname(): void;
+}) {
   const [now, setNow] = useState(Date.now());
   const [copied, setCopied] = useState(false);
 
@@ -27,7 +41,7 @@ export function StatusBadge({ status, pending }: { status: ConnectionStatus; pen
   switch (status.kind) {
     case "connected":
       tone = "ok";
-      label = `已连接 · ${status.peers} 人在线${status.latencyMs !== null ? ` · 延迟 ${status.latencyMs} ms` : ""}`;
+      label = `${status.peers} 人在线${status.latencyMs !== null ? ` · ${status.latencyMs} ms` : ""}`;
       break;
     case "connecting":
       tone = "warn";
@@ -47,13 +61,23 @@ export function StatusBadge({ status, pending }: { status: ConnectionStatus; pen
 
   return (
     <div className="topbar">
-      <span className={`status status-${tone}`} title="与服务器的实时连接状态">
+      {boardName && (
+        <button className="chip board-name" onClick={onRename} title="点击重命名白板">
+          {boardName}
+        </button>
+      )}
+      <span className={`status status-${tone}`} title="与服务器的连接状态；连上后显示在线人数和网络延迟">
         <span className="dot" />
         {label}
         {pending > 0 && status.kind !== "not_found" && <span className="pending">，{pending} 处修改待同步</span>}
       </span>
-      <button className="share" onClick={copyLink}>
-        {copied ? "已复制" : "复制分享链接"}
+      {nickname && (
+        <button className="chip" onClick={onEditNickname} title="点击修改昵称">
+          我：{nickname}
+        </button>
+      )}
+      <button className="chip" onClick={copyLink} title="复制这块白板的链接">
+        {copied ? "已复制" : "分享"}
       </button>
     </div>
   );
