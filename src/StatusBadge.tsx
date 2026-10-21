@@ -9,6 +9,7 @@ export function StatusBadge({
   onRename,
   onEditNickname,
   onEditSolid,
+  onInsertSolid,
 }: {
   status: ConnectionStatus;
   pending: number;
@@ -18,6 +19,7 @@ export function StatusBadge({
   onEditNickname(): void;
   // 选中 3D 体时才有
   onEditSolid?: () => void;
+  onInsertSolid(): void;
 }) {
   const [now, setNow] = useState(Date.now());
   const [copied, setCopied] = useState(false);
@@ -68,9 +70,14 @@ export function StatusBadge({
 
   return (
     <div className="topbar">
-      {onEditSolid && (
+      {/* Excalidraw 的顶部工具栏不支持加自定义按钮，所以放在右上角这一排的最前面 */}
+      {onEditSolid ? (
         <button className="chip solid-edit" onClick={onEditSolid}>
           修改 3D 尺寸
+        </button>
+      ) : (
+        <button className="chip solid-edit" onClick={onInsertSolid} title="插入立方体、圆柱、圆锥、球">
+          ＋ 3D 体
         </button>
       )}
       {boardName && (

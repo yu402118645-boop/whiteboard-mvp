@@ -380,6 +380,7 @@ export function Board({ boardId }: { boardId: string }) {
             nickname={nickname}
             onRename={() => setDialog("rename")}
             onEditNickname={() => setDialog("nickname")}
+            onInsertSolid={() => setSolidDialog({ spec: { type: "cube", ...DEFAULT_SIZE.cube }, editing: false })}
             onEditSolid={
               selectedSolid ? () => setSolidDialog({ spec: selectedSolid.spec, editing: true }) : undefined
             }
