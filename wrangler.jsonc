@@ -3,6 +3,9 @@
   "name": "whiteboard-mvp",
   "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
+  // 自定义域名（域名需先托管在同一个 Cloudflare 账号下）；同时保留 workers.dev 地址
+  "routes": [{ "pattern": "board.yingxinzone.top", "custom_domain": true }],
+  "workers_dev": true,
   // 前端构建产物（dist）作为静态资源；/api/* 先交给 Worker 处理，其余路径按单页应用回退到 index.html
   "assets": {
     "directory": "./dist",
