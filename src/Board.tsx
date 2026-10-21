@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CaptureUpdateAction, Excalidraw, MainMenu, reconcileElements } from "@excalidraw/excalidraw";
+import {
+  CaptureUpdateAction,
+  Excalidraw,
+  MainMenu,
+  reconcileElements,
+  useHandleLibrary,
+} from "@excalidraw/excalidraw";
 import type {
   BinaryFileData,
   BinaryFiles,
@@ -15,6 +21,7 @@ import { clientId, getName, saveName } from "./identity";
 import { getSnapshot, renameBoard, type SnapshotSummary } from "./api";
 import { HistoryDialog } from "./HistoryDialog";
 import { downloadFile, uploadFile } from "./files";
+import { libraryAdapter } from "./library";
 
 // 本地也缓存一份，离线时刷新页面不丢修改，重连后再补发到服务器
 const cacheKey = (boardId: string) => `whiteboard:${boardId}`;
@@ -79,6 +86,9 @@ export function Board({ boardId }: { boardId: string }) {
   const uploadedFiles = useRef(new Set<string>());
   const uploadingFiles = useRef(new Set<string>());
   const downloadingFiles = useRef(new Set<string>());
+
+  // 素材库存在服务器上、所有人共用；也处理从官方素材网站跳回来的一键导入
+  useHandleLibrary({ excalidrawAPI: api, adapter: libraryAdapter });
 
   useEffect(() => {
     document.title = boardName ? `${boardName} · 共享白板` : "共享白板";

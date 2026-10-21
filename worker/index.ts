@@ -42,10 +42,25 @@ const DEFAULT_BOARD_NAME = "未命名白板";
 // 自动备份：有修改时每 2 分钟存一份快照，每块白板保留最近 20 份
 const SNAPSHOT_INTERVAL_MS = 2 * 60_000;
 const SNAPSHOT_KEEP = 20;
-// 快照按块存储，单块不超过 SQLite 2 MB 的上限（中文每字符 3 字节）
-const SNAPSHOT_CHUNK_CHARS = 500_000;
+// 大段 JSON 按块存储，单块不超过 SQLite 2 MB 的上限（中文每字符 3 字节）
+const CHUNK_CHARS = 500_000;
+// 共享素材库的大小上限：远小于免费计划 5 GB 的存储额度，不会有存储风险
+const MAX_LIBRARY_BYTES = 5_000_000;
 // 回收站里的白板保留 7 天
 const TRASH_RETENTION_MS = 7 * 24 * 3600_000;
+
+function splitChunks(data: string): string[] {
+  const chunks: string[] = [];
+  for (let start = 0; start < data.length; ) {
+    let end = Math.min(start + CHUNK_CHARS, data.length);
+    // 不要把 emoji 等占两个 UTF-16 单元的字符切成两半
+    const last = data.charCodeAt(end - 1);
+    if (end < data.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+    chunks.push(data.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
 
 function newBoardId(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
@@ -230,18 +245,8 @@ export class Board extends DurableObject<Env> {
             JSON.stringify(editors),
           )
           .one();
-        for (let seq = 0, start = 0; start < data.length; seq++) {
-          let end = Math.min(start + SNAPSHOT_CHUNK_CHARS, data.length);
-          // 不要把 emoji 等占两个 UTF-16 单元的字符切成两半
-          const last = data.charCodeAt(end - 1);
-          if (end < data.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
-          this.sql.exec(
-            `INSERT INTO snapshot_chunks (snapshot_id, seq, data) VALUES (?, ?, ?)`,
-            id,
-            seq,
-            data.slice(start, end),
-          );
-          start = end;
+        for (const [seq, chunk] of splitChunks(data).entries()) {
+          this.sql.exec(`INSERT INTO snapshot_chunks (snapshot_id, seq, data) VALUES (?, ?, ?)`, id, seq, chunk);
         }
         const cutoff = this.sql
           .exec<{ id: number }>(`SELECT id FROM snapshots ORDER BY id DESC LIMIT 1 OFFSET ?`, SNAPSHOT_KEEP - 1)
@@ -514,6 +519,8 @@ export class Directory extends DurableObject<Env> {
       created_at TEXT NOT NULL,
       last_opened_at TEXT
     )`);
+    // 全站共用的素材库，按块存储（单个值不能超过 2 MB）
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS library_chunks (seq INTEGER PRIMARY KEY, data TEXT NOT NULL)`);
     // 回收站功能后加的列，老数据需要补上
     const columns = this.sql.exec<{ name: string }>(`PRAGMA table_info(boards)`).toArray();
     if (!columns.some((c) => c.name === "deleted_at")) {
@@ -535,6 +542,20 @@ export class Directory extends DurableObject<Env> {
         lastOpenedAt: r.last_opened_at,
         deletedAt: r.deleted_at,
       }));
+  }
+
+  getLibrary(): string | null {
+    const chunks = this.sql.exec<{ data: string }>(`SELECT data FROM library_chunks ORDER BY seq`).toArray();
+    return chunks.length > 0 ? chunks.map((c) => c.data).join("") : null;
+  }
+
+  saveLibrary(data: string): void {
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(`DELETE FROM library_chunks`);
+      for (const [seq, chunk] of splitChunks(data).entries()) {
+        this.sql.exec(`INSERT INTO library_chunks (seq, data) VALUES (?, ?)`, seq, chunk);
+      }
+    });
   }
 
   trash(id: string): void {
@@ -641,6 +662,29 @@ export default {
         await board(env, id).create(id, name);
         await directory(env).add(id, name, new Date().toISOString());
         return json({ id, name }, 201);
+      }
+      return json({ error: "method not allowed" }, 405);
+    }
+
+    if (path === "/api/library") {
+      if (request.method === "GET") {
+        const data = await directory(env).getLibrary();
+        return new Response(data ?? '{"libraryItems":[]}', {
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
+      if (request.method === "PUT") {
+        const data = await request.text();
+        if (new TextEncoder().encode(data).byteLength > MAX_LIBRARY_BYTES) return json({ error: "素材库太大了，请删掉一些素材后再试" }, 413);
+        let parsed: { libraryItems?: unknown };
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          return json({ error: "invalid json" }, 400);
+        }
+        if (!Array.isArray(parsed.libraryItems)) return json({ error: "invalid library" }, 400);
+        await directory(env).saveLibrary(JSON.stringify({ libraryItems: parsed.libraryItems }));
+        return json({ ok: true });
       }
       return json({ error: "method not allowed" }, 405);
     }
