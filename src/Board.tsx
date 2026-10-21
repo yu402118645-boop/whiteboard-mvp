@@ -27,10 +27,13 @@ import { libraryAdapter } from "./library";
 import { SolidDialog } from "./SolidDialog";
 import {
   createSolidElements,
+  CUT_MAX,
   DEFAULT_SIZE,
   DEFAULT_SOLID_BACKGROUND,
   findSelectedSolid,
   repairSolids,
+  SIZE_MAX,
+  SIZE_MIN,
   styleOf,
   type SolidSpec,
 } from "./solids";
@@ -66,6 +69,29 @@ type Dialog = "nickname" | "rename" | "history" | null;
 
 function randomNonce(): number {
   return Math.floor(Math.random() * 2 ** 31);
+}
+
+
+/**
+ * 3D 体在画布上可能被直接拖边框拉伸过，记录的尺寸就过时了。
+ * 打开「修改尺寸」前按当前实际大小换算，免得一确认就变回原来的大小。
+ */
+function currentSolidSpec(solid: NonNullable<ReturnType<typeof findSelectedSolid>>): SolidSpec {
+  const { spec, members } = solid;
+  const [ex0, ey0, ex1, ey1] = getCommonBounds(createSolidElements(spec, { x: 0, y: 0 }, styleOf(members)));
+  const [ax0, ay0, ax1, ay1] = getCommonBounds(members);
+  const sx = (ax1 - ax0) / (ex1 - ex0);
+  const sy = (ay1 - ay0) / (ey1 - ey0);
+  if (!(sx > 0 && sy > 0) || (Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01)) return spec;
+  // 进深同时影响宽和高，取两个方向缩放的平均
+  const size = (v: number, scale: number) => Math.round(Math.min(SIZE_MAX, Math.max(SIZE_MIN, v * scale)));
+  return {
+    ...spec,
+    w: size(spec.w, sx),
+    h: size(spec.h, sy),
+    d: size(spec.d, (sx + sy) / 2),
+    ...(spec.cut !== undefined && { cut: Math.round(Math.min(CUT_MAX, spec.cut * sy)) }),
+  };
 }
 
 export function Board({ boardId }: { boardId: string }) {
@@ -308,11 +334,21 @@ export function Board({ boardId }: { boardId: string }) {
     }
   };
 
+  // selectedSolid 只用来决定是否显示按钮；真正修改时要从画布重新取，
+  // 否则拿到的是上次修改前（或被拉伸前）的旧尺寸和旧位置
+  const currentSelectedSolid = () =>
+    api ? findSelectedSolid(api.getSceneElements(), api.getAppState().selectedElementIds) : null;
+
+  const openSolidEditor = () => {
+    const solid = currentSelectedSolid();
+    if (solid) setSolidDialog({ spec: currentSolidSpec(solid), editing: true });
+  };
+
   const insertSolid = (spec: SolidSpec) => {
     setSolidDialog(null);
     if (!api) return;
     const appState = api.getAppState();
-    const editing = solidDialog?.editing ? selectedSolid : null;
+    const editing = solidDialog?.editing ? currentSelectedSolid() : null;
     let elements: ExcalidrawElement[];
     let existing = api.getSceneElementsIncludingDeleted() as ExcalidrawElement[];
     if (editing) {
@@ -382,7 +418,7 @@ export function Board({ boardId }: { boardId: string }) {
             onEditNickname={() => setDialog("nickname")}
             onInsertSolid={() => setSolidDialog({ spec: { type: "cube", ...DEFAULT_SIZE.cube }, editing: false })}
             onEditSolid={
-              selectedSolid ? () => setSolidDialog({ spec: selectedSolid.spec, editing: true }) : undefined
+              selectedSolid ? openSolidEditor : undefined
             }
           />
         )}
