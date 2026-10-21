@@ -155,10 +155,16 @@ export function createSolidElements(
     const points = part.points.map(([x, y]) => [x - x0, y - y0] as Point);
     // 首尾相同的线条在 Excalidraw 里是封闭图形，才能填充背景
     if (part.closed) points.push([0, 0]);
+    // 必须显式给出包围盒尺寸：不给的话会按默认值（宽 100、高 0）记录，
+    // 一拉伸，曲线上的点就会按高度 0 缩放，塌成一条直线
+    const xs = points.map(([x]) => x);
+    const ys = points.map(([, y]) => y);
     return {
       type: "line" as const,
       x: origin.x + x0,
       y: origin.y + y0,
+      width: Math.max(...xs) - Math.min(...xs),
+      height: Math.max(...ys) - Math.min(...ys),
       points,
       strokeStyle: part.dashed ? ("dashed" as const) : ("solid" as const),
       ...common,
@@ -198,4 +204,29 @@ export function styleOf(members: readonly ExcalidrawElement[]): SolidStyle {
     roughness: face.roughness,
     opacity: face.opacity,
   };
+}
+
+/**
+ * 修复早期版本插入的 3D 体：当时线条没记录正确的包围盒尺寸，一拉伸就会塌成直线。
+ * 返回需要更新的元素（已提升版本号），没有需要修的就返回空数组。
+ */
+export function repairSolids(elements: readonly ExcalidrawElement[]): ExcalidrawElement[] {
+  const fixed: ExcalidrawElement[] = [];
+  for (const el of elements) {
+    if (el.isDeleted || el.type !== "line" || !el.customData?.solid) continue;
+    const xs = el.points.map(([x]) => x);
+    const ys = el.points.map(([, y]) => y);
+    const width = Math.max(...xs) - Math.min(...xs);
+    const height = Math.max(...ys) - Math.min(...ys);
+    if (Math.abs(width - el.width) < 0.5 && Math.abs(height - el.height) < 0.5) continue;
+    fixed.push({
+      ...el,
+      width,
+      height,
+      version: el.version + 1,
+      versionNonce: Math.floor(Math.random() * 2 ** 31),
+      updated: Date.now(),
+    });
+  }
+  return fixed;
 }

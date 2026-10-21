@@ -30,6 +30,7 @@ import {
   DEFAULT_SIZE,
   DEFAULT_SOLID_BACKGROUND,
   findSelectedSolid,
+  repairSolids,
   styleOf,
   type SolidSpec,
 } from "./solids";
@@ -189,6 +190,16 @@ export function Board({ boardId }: { boardId: string }) {
         setBoardName(name);
         syncedVersions.current = new Map(elements.map((el) => [el.id, el.version]));
         applyRemote(elements as ExcalidrawElement[]);
+        if (api) {
+          const repaired = repairSolids(api.getSceneElementsIncludingDeleted());
+          if (repaired.length > 0) {
+            const byId = new Map(repaired.map((el) => [el.id, el]));
+            api.updateScene({
+              elements: api.getSceneElementsIncludingDeleted().map((el) => byId.get(el.id) ?? el),
+              captureUpdate: CaptureUpdateAction.NEVER,
+            });
+          }
+        }
         flush();
       },
       onRemoteUpdate(elements) {
