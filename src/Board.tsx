@@ -3,9 +3,11 @@ import {
   CaptureUpdateAction,
   Excalidraw,
   getCommonBounds,
+  getVisibleSceneBounds,
   MainMenu,
   reconcileElements,
   useHandleLibrary,
+  zoomToFitBounds,
 } from "@excalidraw/excalidraw";
 import type {
   AppState,
@@ -16,7 +18,7 @@ import type {
   SocketId,
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement, OrderedExcalidrawElement } from "@excalidraw/excalidraw/element/types";
-import { BoardSync, type ConnectionStatus, type RemotePointer } from "./sync";
+import { BoardSync, type ConnectionStatus, type RemotePointer, type ViewportBounds } from "./sync";
 import { StatusBadge } from "./StatusBadge";
 import { NameDialog } from "./NameDialog";
 import { clientId, getName, saveName } from "./identity";
@@ -60,7 +62,9 @@ function saveCache(boardId: string, elements: readonly ExcalidrawElement[]): voi
 // 把绘制过程中的高频变化合并后再发送，控制免费额度内的消息数量
 const SEND_THROTTLE_MS = 80;
 // 鼠标位置每秒最多发 5 次：光标会有点跳，但消息量只有不限速时的几分之一
-const POINTER_THROTTLE_MS = 200;
+const POINTER_THROTTLE_MS = 150;
+// 被人跟随时，自己的视野范围最多这么久发一次（只在拖动、缩放画布时发）
+const VIEWPORT_THROTTLE_MS = 150;
 const CACHE_THROTTLE_MS = 1000;
 const FILE_RETRY_MS = 2000;
 const FILE_MAX_RETRIES = 15;
@@ -129,9 +133,18 @@ export function Board({ boardId }: { boardId: string }) {
   const syncRef = useRef<BoardSync | null>(null);
   const sendTimer = useRef<number | undefined>(undefined);
   const cacheTimer = useRef<number | undefined>(undefined);
+  const latestElements = useRef<readonly ExcalidrawElement[]>([]);
   const collaborators = useRef(new Map<SocketId, Collaborator>());
   const pointerTimer = useRef<number | undefined>(undefined);
   const latestPointer = useRef<Omit<RemotePointer, "cid" | "name"> | null>(null);
+  // 别人的光标每 150 毫秒才收到一次，中间用动画平滑过渡，看起来不跳（不增加任何流量）
+  const pointerAnims = useRef(new Map<SocketId, { from: { x: number; y: number }; to: { x: number; y: number }; start: number }>());
+  const pointerFrame = useRef<number | undefined>(undefined);
+  // 跟随视角：我正在跟随谁、谁在跟随我
+  const following = useRef<string | null>(null);
+  const followers = useRef(new Set<string>());
+  const viewportTimer = useRef<number | undefined>(undefined);
+  const lastViewport = useRef("");
   // 图片：服务器已有的、正在上传的、正在下载的
   const uploadedFiles = useRef(new Set<string>());
   const uploadingFiles = useRef(new Set<string>());
@@ -212,6 +225,40 @@ export function Board({ boardId }: { boardId: string }) {
     api?.updateScene({ collaborators: new Map(collaborators.current) });
   }, [api]);
 
+  const animatePointers = useCallback(() => {
+    const now = performance.now();
+    for (const [id, anim] of pointerAnims.current) {
+      const collaborator = collaborators.current.get(id);
+      if (!collaborator?.pointer) {
+        pointerAnims.current.delete(id);
+        continue;
+      }
+      const dx = anim.to.x - anim.from.x;
+      const dy = anim.to.y - anim.from.y;
+      // 距离太远（比如对方跳到画布另一头）就直接过去，不要慢慢滑
+      const t = Math.hypot(dx, dy) > 3000 ? 1 : Math.min(1, (now - anim.start) / POINTER_THROTTLE_MS);
+      collaborators.current.set(id, {
+        ...collaborator,
+        pointer: { ...collaborator.pointer, x: anim.from.x + dx * t, y: anim.from.y + dy * t },
+      });
+      if (t >= 1) pointerAnims.current.delete(id);
+    }
+    updateCollaborators();
+    pointerFrame.current = pointerAnims.current.size > 0 ? requestAnimationFrame(animatePointers) : undefined;
+  }, [updateCollaborators]);
+
+  /** 有人跟随我时，把我当前的可视范围发出去；范围没变就不发 */
+  const sendViewport = useCallback(() => {
+    viewportTimer.current = undefined;
+    if (!api || followers.current.size === 0) return;
+    const [x1, y1, x2, y2] = getVisibleSceneBounds(api.getAppState());
+    const bounds: ViewportBounds = [x1, y1, x2, y2].map((v) => Math.round(v)) as ViewportBounds;
+    const key = bounds.join(",");
+    if (key === lastViewport.current) return;
+    lastViewport.current = key;
+    syncRef.current?.sendViewport(bounds);
+  }, [api]);
+
   useEffect(() => {
     if (!api) return;
     const sync = new BoardSync(boardId, { cid: clientId, name: getName() }, {
@@ -243,20 +290,39 @@ export function Board({ boardId }: { boardId: string }) {
           next.set(id, { ...collaborators.current.get(id), id: user.cid, socketId: id, username: user.name });
         }
         collaborators.current = next;
-        updateCollaborators();
+        // 谁在跟随我：有新的人开始跟随时，马上把当前视野发过去
+        const nextFollowers = new Set(users.filter((u) => u.following === clientId).map((u) => u.cid));
+        const gained = [...nextFollowers].some((cid) => !followers.current.has(cid));
+        followers.current = nextFollowers;
+        if (gained) {
+          lastViewport.current = "";
+          sendViewport();
+        }
+        api?.updateScene({
+          collaborators: new Map(collaborators.current),
+          appState: { followedBy: new Set([...nextFollowers].map((cid) => cid as SocketId)) },
+        });
       },
       onPointer(p) {
         if (p.cid === clientId) return;
         const id = p.cid as SocketId;
+        const previous = collaborators.current.get(id)?.pointer;
+        const target = { x: p.x, y: p.y };
         collaborators.current.set(id, {
           ...collaborators.current.get(id),
           id: p.cid,
           socketId: id,
           username: p.name,
-          pointer: { x: p.x, y: p.y, tool: p.tool },
+          pointer: { x: previous?.x ?? p.x, y: previous?.y ?? p.y, tool: p.tool },
           button: p.button,
         });
-        updateCollaborators();
+        pointerAnims.current.set(id, { from: previous ?? target, to: target, start: performance.now() });
+        if (pointerFrame.current === undefined) pointerFrame.current = requestAnimationFrame(animatePointers);
+      },
+      onViewport(cid, bounds) {
+        if (cid !== following.current || !api) return;
+        const { appState } = zoomToFitBounds({ bounds, appState: api.getAppState(), fitToViewport: true, viewportZoomFactor: 1 });
+        api.updateScene({ appState: { scrollX: appState.scrollX, scrollY: appState.scrollY, zoom: appState.zoom } });
       },
       onBoardName: setBoardName,
       onStatus: setStatus,
@@ -267,8 +333,11 @@ export function Board({ boardId }: { boardId: string }) {
       syncRef.current = null;
       window.clearTimeout(sendTimer.current);
       window.clearTimeout(pointerTimer.current);
+      window.clearTimeout(viewportTimer.current);
+      if (pointerFrame.current !== undefined) cancelAnimationFrame(pointerFrame.current);
+      pointerFrame.current = undefined;
     };
-  }, [api, boardId, applyRemote, flush, updateCollaborators]);
+  }, [api, boardId, applyRemote, flush, updateCollaborators, animatePointers, sendViewport]);
 
   const onChange = useCallback(
     (elements: readonly ExcalidrawElement[], appState: AppState, _files: BinaryFiles) => {
@@ -277,10 +346,25 @@ export function Board({ boardId }: { boardId: string }) {
         prev?.groupId === solid?.groupId && prev?.members.length === solid?.members.length ? prev : solid,
       );
       if (sendTimer.current === undefined) sendTimer.current = window.setTimeout(flush, SEND_THROTTLE_MS);
-      window.clearTimeout(cacheTimer.current);
-      cacheTimer.current = window.setTimeout(() => saveCache(boardId, elements), CACHE_THROTTLE_MS);
+      // 点别人头像开始跟随、点「停止跟随」或自己拖动画布（Excalidraw 会自动取消跟随）时通知服务器
+      const target = appState.userToFollow?.socketId ?? null;
+      if (target !== following.current) {
+        following.current = target;
+        syncRef.current?.setFollowing(target);
+      }
+      if (followers.current.size > 0 && viewportTimer.current === undefined) {
+        viewportTimer.current = window.setTimeout(sendViewport, VIEWPORT_THROTTLE_MS);
+      }
+      // 节流而不是防抖：别人的光标动画每帧都会触发 onChange，防抖的话会一直推迟、永远存不上
+      latestElements.current = elements;
+      if (cacheTimer.current === undefined) {
+        cacheTimer.current = window.setTimeout(() => {
+          cacheTimer.current = undefined;
+          saveCache(boardId, latestElements.current);
+        }, CACHE_THROTTLE_MS);
+      }
     },
-    [boardId, flush],
+    [boardId, flush, sendViewport],
   );
 
   const onPointerUpdate = useCallback(

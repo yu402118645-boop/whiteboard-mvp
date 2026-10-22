@@ -13,10 +13,12 @@ type Element = { id: string; version: number; versionNonce: number; [key: string
 type ClientMessage =
   | { type: "update"; elements: Element[] }
   | { type: "pointer"; x: number; y: number; tool: string; button: string }
-  | { type: "profile"; name: string };
+  | { type: "profile"; name: string }
+  | { type: "follow"; target: string | null }
+  | { type: "viewport"; bounds: number[] };
 
-// 每个连接附带的身份信息，休眠后也能恢复
-type Attachment = { cid: string; name: string };
+// 每个连接附带的身份信息，休眠后也能恢复；following 是正在跟随谁的视角
+type Attachment = { cid: string; name: string; following?: string | null };
 
 export type BoardSummary = {
   id: string;
@@ -361,6 +363,26 @@ export class Board extends DurableObject<Env> {
         this.broadcastPresence();
         break;
       }
+      case "follow": {
+        const attachment = ws.deserializeAttachment() as Attachment;
+        const following = typeof message.target === "string" ? message.target.slice(0, 64) : null;
+        ws.serializeAttachment({ ...attachment, following });
+        this.broadcastPresence();
+        break;
+      }
+      case "viewport":
+        this.handleViewport(ws, message.bounds);
+        break;
+    }
+  }
+
+  // 视野范围只转发给正在跟随发送者的人，不存储；没人跟随时客户端根本不会发
+  private handleViewport(ws: WebSocket, bounds: unknown): void {
+    if (!Array.isArray(bounds) || bounds.length !== 4 || !bounds.every(Number.isFinite)) return;
+    const { cid } = ws.deserializeAttachment() as Attachment;
+    const payload = JSON.stringify({ type: "viewport", cid, bounds });
+    for (const s of this.openSockets()) {
+      if ((s.deserializeAttachment() as Attachment | null)?.following === cid) this.safeSend(s, payload);
     }
   }
 
@@ -486,7 +508,9 @@ export class Board extends DurableObject<Env> {
     const users = this.openSockets(leaving).map((s) => s.deserializeAttachment() as Attachment | null);
     const payload = JSON.stringify({
       type: "presence",
-      users: users.filter((u): u is Attachment => u !== null).map((u) => ({ cid: u.cid, name: u.name })),
+      users: users
+        .filter((u): u is Attachment => u !== null)
+        .map((u) => ({ cid: u.cid, name: u.name, following: u.following ?? null })),
     });
     this.broadcast(payload, leaving);
   }

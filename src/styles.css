@@ -567,3 +567,10 @@ body {
   text-align: right;
   color: #666;
 }
+
+/* Excalidraw 按宽度决定显示几个头像，被我们的按钮挤窄后只剩「+N」；至少留出一个头像的位置 */
+@media (min-width: 901px) {
+  .UserList__wrapper {
+    min-width: 76px;
+  }
+}

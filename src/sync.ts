@@ -9,7 +9,11 @@ export type ConnectionStatus =
 
 type SyncedElement = { id: string; version: number; versionNonce: number };
 
-export type PresenceUser = { cid: string; name: string };
+// following：这个人正在跟随谁的视角（对方的 cid），没在跟随就是 null
+export type PresenceUser = { cid: string; name: string; following: string | null };
+
+/** 场景坐标下的可视范围 [左, 上, 右, 下] */
+export type ViewportBounds = [number, number, number, number];
 
 export type RemotePointer = {
   cid: string;
@@ -25,6 +29,7 @@ type ServerMessage =
   | { type: "update"; elements: SyncedElement[] }
   | { type: "presence"; users: PresenceUser[] }
   | ({ type: "pointer" } & RemotePointer)
+  | { type: "viewport"; cid: string; bounds: ViewportBounds }
   | { type: "meta"; name: string }
   | { type: "error"; code: string };
 
@@ -33,6 +38,7 @@ export interface SyncHandlers {
   onRemoteUpdate(elements: SyncedElement[]): void;
   onPresence(users: PresenceUser[]): void;
   onPointer(pointer: RemotePointer): void;
+  onViewport(cid: string, bounds: ViewportBounds): void;
   onBoardName(name: string): void;
   onStatus(status: ConnectionStatus): void;
 }
@@ -56,6 +62,7 @@ export class BoardSync {
   private retryTimer: number | undefined;
   private heartbeatTimer: number | undefined;
   private connectTimer: number | undefined;
+  private following: string | null = null;
 
   constructor(
     private boardId: string,
@@ -81,6 +88,21 @@ export class BoardSync {
   sendPointer(pointer: Omit<RemotePointer, "cid" | "name">): void {
     if (!this.ready || this.ws?.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "pointer", ...pointer }));
+  }
+
+  /** 跟随某人的视角（传 null 取消）；断线重连后会自动重新告诉服务器 */
+  setFollowing(cid: string | null): void {
+    if (this.following === cid) return;
+    this.following = cid;
+    if (this.ready && this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "follow", target: cid }));
+    }
+  }
+
+  /** 有人跟随自己时，把自己的可视范围发给他们 */
+  sendViewport(bounds: ViewportBounds): void {
+    if (!this.ready || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "viewport", bounds }));
   }
 
   setName(name: string): void {
@@ -138,6 +160,7 @@ export class BoardSync {
           this.ready = true;
           this.attempt = 0;
           this.handlers.onInit(message.elements, message.name);
+          if (this.following) this.ws?.send(JSON.stringify({ type: "follow", target: this.following }));
           this.emitConnected();
           break;
         case "update":
@@ -150,6 +173,9 @@ export class BoardSync {
           break;
         case "pointer":
           this.handlers.onPointer(message);
+          break;
+        case "viewport":
+          this.handlers.onViewport(message.cid, message.bounds);
           break;
         case "meta":
           this.handlers.onBoardName(message.name);
