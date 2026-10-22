@@ -127,13 +127,145 @@ body {
   padding: 24px;
 }
 
-@media (max-width: 640px) {
-  .status {
-    font-size: 12px;
-  }
-  .chip {
+/* 手机竖屏：横排换成状态圆点 + 「⋯」菜单 */
+.topbar-compact {
+  display: none;
+  position: relative;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot-only {
+  padding: 6px 8px;
+  gap: 4px;
+}
+
+.more-button {
+  padding: 4px 10px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.compact-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+}
+
+.compact-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.compact-menu button {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: 15px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.compact-menu button:active {
+  background: #f1f0ff;
+}
+
+.compact-menu-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #f1f0ff;
+}
+
+.compact-menu-status .dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.compact-toast {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #1e1e1e;
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* 窄屏（手机、竖着拿的 iPad）横排放不下，换成圆点 + 菜单 */
+@media (max-width: 900px) {
+  .topbar {
     display: none;
   }
+  .topbar-compact {
+    display: flex;
+  }
+}
+
+/* 手机上 Excalidraw 的工具栏本身就占满一行，圆点和菜单挪到左上角的空白处，不跟它抢位置 */
+@media (max-width: 640px) {
+  .topbar-compact {
+    position: fixed;
+    top: 62px;
+    left: 12px;
+    z-index: 5;
+  }
+  .compact-menu,
+  .compact-toast {
+    right: auto;
+    left: 0;
+  }
+}
+
+/* 平板横屏：保持横排，缩小间距和字号 */
+@media (min-width: 901px) and (max-width: 1200px) {
+  .topbar {
+    gap: 3px;
+  }
+  .topbar .chip,
+  .topbar .status {
+    padding: 4px 6px;
+    font-size: 12px;
+  }
+  .topbar .status {
+    gap: 4px;
+  }
+  .board-name {
+    max-width: 64px !important;
+  }
+  .topbar .status-label,
+  .topbar .me-prefix {
+    display: none;
+  }
+  .topbar .status-short {
+    display: inline;
+  }
+}
+
+.status-short {
+  display: none;
 }
 
 .board-name {
@@ -377,12 +509,6 @@ body {
   background: #f1f0ff !important;
   color: #6965db;
   font-weight: 600;
-}
-
-@media (max-width: 640px) {
-  .solid-edit {
-    display: inline-block;
-  }
 }
 
 .solid-slider input.invalid {

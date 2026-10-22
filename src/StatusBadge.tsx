@@ -23,6 +23,8 @@ export function StatusBadge({
 }) {
   const [now, setNow] = useState(Date.now());
   const [copied, setCopied] = useState(false);
+  // 手机竖屏时收起来的「⋯」菜单是否展开
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     if (status.kind !== "offline") return;
@@ -68,7 +70,15 @@ export function StatusBadge({
       break;
   }
 
+  const showPending = pending > 0 && status.kind !== "not_found" && status.kind !== "deleted";
+  // 菜单里的按钮点完顺手把菜单关掉
+  const fromMenu = (action: () => void) => () => {
+    setMenuOpen(false);
+    action();
+  };
+
   return (
+    <>
     <div className="topbar">
       {/* Excalidraw 的顶部工具栏不支持加自定义按钮，所以放在右上角这一排的最前面 */}
       {onEditSolid ? (
@@ -85,19 +95,57 @@ export function StatusBadge({
           {boardName}
         </button>
       )}
-      <span className={`status status-${tone}`} title="与服务器的连接状态；连上后显示在线人数和网络延迟">
+      <span className={`status status-${tone}`} title={`与服务器的连接状态：${label}`}>
         <span className="dot" />
-        {label}
-        {pending > 0 && status.kind !== "not_found" && status.kind !== "deleted" && <span className="pending">，{pending} 处修改待同步</span>}
+        <span className="status-label">{label}</span>
+        {/* 平板横屏放不下完整文字时只显示在线人数 */}
+        <span className="status-short">{status.kind === "connected" ? `${status.peers} 人` : label}</span>
+        {showPending && <span className="pending">，{pending} 处修改待同步</span>}
       </span>
       {nickname && (
         <button className="chip" onClick={onEditNickname} title="点击修改昵称">
-          我：{nickname}
+          <span className="me-prefix">我：</span>
+          {nickname}
         </button>
       )}
       <button className="chip" onClick={copyLink} title="复制这块白板的链接">
         {copied ? "已复制" : "分享"}
       </button>
     </div>
+    {/* 手机竖屏：只留一个连接状态圆点和「⋯」菜单，免得把 Excalidraw 的工具栏挤出屏幕 */}
+    <div className="topbar-compact">
+      <span className={`status status-${tone} status-dot-only`} title={label}>
+        <span className="dot" />
+        {status.kind === "connected" && status.peers}
+        {showPending && <span className="pending">!</span>}
+      </span>
+      <button className="chip more-button" onClick={() => setMenuOpen((open) => !open)} aria-label="更多">
+        ⋯
+      </button>
+      {menuOpen && (
+        <>
+          <div className="compact-menu-backdrop" onClick={() => setMenuOpen(false)} />
+          <div className="compact-menu">
+            <div className={`compact-menu-status status-${tone}`}>
+              <span className="dot" />
+              <span>
+                {label}
+                {showPending && <span className="pending">，{pending} 处修改待同步</span>}
+              </span>
+            </div>
+            {onEditSolid ? (
+              <button onClick={fromMenu(onEditSolid)}>修改 3D 尺寸</button>
+            ) : (
+              <button onClick={fromMenu(onInsertSolid)}>＋ 插入 3D 体</button>
+            )}
+            {boardName && <button onClick={fromMenu(onRename)}>重命名白板「{boardName}」</button>}
+            {nickname && <button onClick={fromMenu(onEditNickname)}>修改昵称（{nickname}）</button>}
+            <button onClick={fromMenu(copyLink)}>复制分享链接</button>
+          </div>
+        </>
+      )}
+      {copied && <span className="compact-toast">链接已复制</span>}
+    </div>
+    </>
   );
 }
