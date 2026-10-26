@@ -574,3 +574,170 @@ body {
     min-width: 76px;
   }
 }
+
+/* 选中元素后弹出的快捷工具栏 */
+.quick-toolbar {
+  position: fixed;
+  z-index: 4;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 6px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  font-size: 13px;
+}
+
+.quick-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-row > * + * {
+  padding-left: 6px;
+  border-left: 1px solid #ececf2;
+}
+
+.quick-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.quick-color.active,
+.quick-color:hover {
+  background: #f1f0ff;
+}
+
+.swatch-dot {
+  width: 16px;
+  height: 16px;
+  border: 1px solid #d0d0dc;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.swatch-dot.stroke {
+  border-width: 3px;
+  background: #fff;
+}
+
+.swatch-dot.transparent,
+.quick-swatch.transparent {
+  background: repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%) 50% / 8px 8px;
+}
+
+.quick-font {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-font input {
+  width: 56px;
+  padding: 3px 6px;
+  border: 1px solid #d0d0dc;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.quick-font input.invalid {
+  border-color: #e03131;
+  outline-color: #e03131;
+}
+
+.quick-widths {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.quick-widths button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.quick-widths button span {
+  width: 16px;
+  border-radius: 3px;
+  background: #1e1e1e;
+}
+
+.quick-widths button.active {
+  background: #e0dfff;
+}
+
+.quick-opacity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-opacity input {
+  width: 80px;
+}
+
+.quick-value {
+  width: 34px;
+  color: #666;
+  text-align: right;
+}
+
+.quick-palette {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #ececf2;
+}
+
+.quick-hues,
+.quick-shades {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-shades {
+  margin-top: 6px;
+}
+
+.quick-swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #d0d0dc;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.quick-swatch.selected {
+  outline: 2px solid #6965db;
+  outline-offset: 1px;
+}
+
+.quick-shades input[type="color"] {
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.quick-toolbar .field-error {
+  text-align: left;
+}

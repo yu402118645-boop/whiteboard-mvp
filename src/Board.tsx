@@ -27,6 +27,7 @@ import { HistoryDialog } from "./HistoryDialog";
 import { downloadFile, uploadFile } from "./files";
 import { libraryAdapter } from "./library";
 import { SolidDialog } from "./SolidDialog";
+import { QuickToolbar } from "./QuickToolbar";
 import {
   createSolidElements,
   CUT_MAX,
@@ -600,6 +601,7 @@ export function Board({ boardId }: { boardId: string }) {
         <HistoryDialog boardId={boardId} onRestore={restoreSnapshot} onClose={() => setDialog(null)} />
       )}
       {toast && <div className="toast">{toast}</div>}
+      {api && <QuickToolbar api={api} />}
       {solidDialog && (
         <SolidDialog
           initial={solidDialog.spec}
