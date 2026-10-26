@@ -12,21 +12,49 @@ import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 // 选中元素后，在它下方弹出的快捷工具栏：颜色、字号、线条粗细、透明度。
 // 只改元素本身的属性，不改 Excalidraw 源码；左侧自带的样式面板照常可用。
 
-// 8 种常用色，每种 5 级由浅到深（取自 Excalidraw 默认色板用的 Open Color）
-const HUES: { name: string; shades: string[] }[] = [
-  { name: "黑", shades: ["#ffffff", "#ced4da", "#868e96", "#495057", "#1e1e1e"] },
-  { name: "红", shades: ["#fff5f5", "#ffc9c9", "#ff8787", "#fa5252", "#e03131"] },
-  { name: "橙", shades: ["#fff4e6", "#ffd8a8", "#ffa94d", "#fd7e14", "#e8590c"] },
-  { name: "黄", shades: ["#fff9db", "#ffec99", "#ffd43b", "#fab005", "#f08c00"] },
-  { name: "绿", shades: ["#ebfbee", "#b2f2bb", "#69db7c", "#40c057", "#2f9e44"] },
-  { name: "青", shades: ["#e6fcf5", "#96f2d7", "#38d9a9", "#12b886", "#099268"] },
-  { name: "蓝", shades: ["#e7f5ff", "#a5d8ff", "#4dabf7", "#228be6", "#1971c2"] },
-  { name: "紫", shades: ["#f3f0ff", "#d0bfff", "#9775fa", "#7950f2", "#6741d9"] },
+// 16 种常用色：第一排明亮色系，第二排马卡龙色系
+const PALETTES: { name: string; colors: { name: string; hex: string }[] }[] = [
+  {
+    name: "明亮",
+    colors: [
+      { name: "黑", hex: "#1e1e1e" },
+      { name: "红", hex: "#e03131" },
+      { name: "橙", hex: "#f76707" },
+      { name: "黄", hex: "#f59f00" },
+      { name: "绿", hex: "#2f9e44" },
+      { name: "青", hex: "#0c8599" },
+      { name: "蓝", hex: "#1971c2" },
+      { name: "紫", hex: "#7048e8" },
+    ],
+  },
+  {
+    name: "马卡龙",
+    colors: [
+      { name: "奶茶", hex: "#e6d5c3" },
+      { name: "樱粉", hex: "#ffc2d1" },
+      { name: "蜜桃", hex: "#ffd6a5" },
+      { name: "柠黄", hex: "#fdffb6" },
+      { name: "薄荷", hex: "#caffbf" },
+      { name: "湖蓝", hex: "#9bf6ff" },
+      { name: "天蓝", hex: "#a0c4ff" },
+      { name: "薰衣草", hex: "#bdb2ff" },
+    ],
+  },
 ];
-// 点色相时默认用哪一级：线条用深色，背景用浅色
-const DEFAULT_SHADE = { strokeColor: 4, backgroundColor: 1 } as const;
+const BASES = PALETTES.flatMap((palette) => palette.colors);
 
-const FONT_SIZES = [12, 14, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96, 128];
+/** 和白色或黑色按比例混合：amount 为正混白（变浅），为负混黑（变深） */
+function mix(hex: string, amount: number): string {
+  const target = amount > 0 ? 255 : 0;
+  const k = Math.abs(amount);
+  const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `#${channels.map((c) => Math.round(c + (target - c) * k).toString(16).padStart(2, "0")).join("")}`;
+}
+// 每种常用色的 5 级深浅：中间一级就是常用色本身
+const SHADE_STEPS = [0.7, 0.4, 0, -0.25, -0.5];
+const SHADES = BASES.map((base) => SHADE_STEPS.map((step) => (step === 0 ? base.hex : mix(base.hex, step))));
+
+const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96, 120, 144];
 const FONT_MIN = 4;
 const FONT_MAX = 400;
 const STROKE_WIDTHS = [1, 2, 4, 6];
@@ -49,7 +77,11 @@ type ToolbarState = {
   opacity: number;
 };
 
-const hueOf = (color: string) => HUES.findIndex((hue) => hue.shades.includes(color.toLowerCase()));
+const HEX = /^#?([0-9a-f]{6})$/i;
+
+/** 把焦点还给画布（Excalidraw 的快捷键监听在它的容器上），输入框会因此失焦并提交 */
+const focusCanvas = () => (document.querySelector(".excalidraw-container") as HTMLElement | null)?.focus();
+const baseOf = (color: string) => SHADES.findIndex((shades) => shades.includes(color.toLowerCase()));
 
 /** 选中的元素，加上容器里绑定的文字（选中方框时文字也要一起变色、变字号） */
 function targets(elements: readonly ExcalidrawElement[], appState: AppState): ExcalidrawElement[] {
@@ -101,8 +133,10 @@ function computeState(elements: readonly ExcalidrawElement[], appState: AppState
 export function QuickToolbar({ api }: { api: ExcalidrawImperativeAPI }) {
   const [state, setState] = useState<ToolbarState | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
-  const [hue, setHue] = useState(0);
+  const [base, setBase] = useState(0);
+  const [hexDraft, setHexDraft] = useState<string | null>(null);
   const [fontDraft, setFontDraft] = useState<string | null>(null);
+  const [fontOpen, setFontOpen] = useState(false);
   const lastKey = useRef("");
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -114,6 +148,11 @@ export function QuickToolbar({ api }: { api: ExcalidrawImperativeAPI }) {
     const { offsetWidth: width, offsetHeight: height } = el;
     if (width !== size.width || height !== size.height) setSize({ width, height });
   });
+
+  // 打开字号列表时，把当前字号滚到可见位置
+  useEffect(() => {
+    if (fontOpen) box.current?.querySelector(".quick-font-list .selected")?.scrollIntoView({ block: "nearest" });
+  }, [fontOpen]);
 
   useEffect(() => {
     const update = (elements: readonly ExcalidrawElement[], appState: AppState) => {
@@ -127,6 +166,8 @@ export function QuickToolbar({ api }: { api: ExcalidrawImperativeAPI }) {
       if (selectionChanged) {
         setPanel(null);
         setFontDraft(null);
+        setFontOpen(false);
+        setHexDraft(null);
       }
     };
     update(api.getSceneElements(), api.getAppState());
@@ -221,12 +262,34 @@ export function QuickToolbar({ api }: { api: ExcalidrawImperativeAPI }) {
       return;
     }
     const current = key === "strokeColor" ? state.stroke : state.background ?? "";
-    const index = hueOf(current);
-    setHue(index >= 0 ? index : key === "strokeColor" ? 0 : 6);
+    setBase(Math.max(0, baseOf(current)));
+    setHexDraft(null);
+    setFontOpen(false);
     setPanel(key);
   };
 
-  const current = panel === "strokeColor" ? state.stroke : state.background;
+  const current = (panel === "strokeColor" ? state.stroke : state.background) ?? "";
+  const pick = (color: string) => {
+    if (!panel) return;
+    const index = baseOf(color);
+    if (index >= 0) setBase(index);
+    setHexDraft(null);
+    setColor(panel, color);
+  };
+  const commitHex = () => {
+    if (hexDraft === null) return;
+    const m = HEX.exec(hexDraft.trim());
+    if (m) pick(`#${m[1].toLowerCase()}`);
+  };
+  const hexInvalid = hexDraft !== null && !HEX.test(hexDraft.trim());
+
+  // 字号列表：工具栏在屏幕下半部分时往上展开
+  const fontUp = top > window.innerHeight / 2;
+  const stepFont = (dir: 1 | -1) => {
+    const now = state.fontSize ?? 20;
+    const next = dir > 0 ? FONT_SIZES.find((v) => v > now) : [...FONT_SIZES].reverse().find((v) => v < now);
+    if (next) setFontSize(next);
+  };
 
   return (
     <div
@@ -262,36 +325,60 @@ export function QuickToolbar({ api }: { api: ExcalidrawImperativeAPI }) {
           </button>
         )}
         {state.fontSize !== null && (
-          <label className="quick-font" title="字号：可以从列表选，也可以直接输入">
+          <div className="quick-font" title="字号：从列表选，或直接输入后按回车；上下方向键切换">
             <span>字号</span>
-            <input
-              type="text"
-              inputMode="numeric"
-              list="quick-font-sizes"
-              className={fontInvalid ? "invalid" : ""}
-              value={fontDraft ?? String(Math.round(state.fontSize))}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => {
-                const text = e.target.value;
-                setFontDraft(text);
-                // 从下拉列表里选中时直接生效
-                if (FONT_SIZES.includes(Number(text)) && (e.nativeEvent as InputEvent).inputType !== "insertText") {
-                  setFontSize(Number(text));
-                  setFontDraft(null);
-                }
-              }}
-              onBlur={commitFont}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitFont();
-                e.stopPropagation();
-              }}
-            />
-            <datalist id="quick-font-sizes">
-              {FONT_SIZES.map((size) => (
-                <option key={size} value={size} />
-              ))}
-            </datalist>
-          </label>
+            <div className="quick-font-box">
+              <input
+                type="text"
+                inputMode="numeric"
+                className={fontInvalid ? "invalid" : ""}
+                value={fontDraft ?? String(Math.round(state.fontSize))}
+                onFocus={(e) => {
+                  e.target.select();
+                  setPanel(null);
+                  setFontOpen(true);
+                }}
+                onClick={() => setFontOpen(true)}
+                onChange={(e) => setFontDraft(e.target.value)}
+                onBlur={() => {
+                  commitFont();
+                  setFontOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") {
+                    focusCanvas();
+                  } else if (e.key === "Escape") {
+                    setFontDraft(null);
+                    focusCanvas();
+                  } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setFontDraft(null);
+                    stepFont(e.key === "ArrowUp" ? 1 : -1);
+                  }
+                }}
+              />
+              {fontOpen && (
+                <ul className={`quick-font-list${fontUp ? " up" : ""}`}>
+                  {FONT_SIZES.map((size) => (
+                    <li
+                      key={size}
+                      className={Math.round(state.fontSize!) === size ? "selected" : ""}
+                      // 按下时不让输入框失去焦点，否则列表会先关掉
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setFontSize(size);
+                        setFontDraft(null);
+                        setFontOpen(false);
+                      }}
+                    >
+                      {size}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
         )}
         {state.strokeWidth !== null && (
           <div className="quick-widths" title="线条粗细">
@@ -324,44 +411,78 @@ export function QuickToolbar({ api }: { api: ExcalidrawImperativeAPI }) {
       {fontInvalid && <p className="field-error">字号请输入 {FONT_MIN}～{FONT_MAX} 之间的整数</p>}
       {panel && (
         <div className="quick-palette">
-          <div className="quick-hues">
+          {PALETTES.map((palette, row) => (
+            <div key={palette.name} className="quick-palette-row">
+              <span className="quick-label">{palette.name}</span>
+              <div className="quick-swatches">
+                {palette.colors.map((color, i) => {
+                  const index = row * 8 + i;
+                  return (
+                    <button
+                      key={color.hex}
+                      className={`quick-swatch${current.toLowerCase() === color.hex ? " selected" : index === base && SHADES[index].includes(current.toLowerCase()) ? " related" : ""}`}
+                      style={{ background: color.hex }}
+                      title={`${color.name} ${color.hex}`}
+                      onClick={() => pick(color.hex)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <div className="quick-palette-row">
+            <span className="quick-label">深浅</span>
+            <div className="quick-shades" title={`${BASES[base].name}的 5 级深浅`}>
+              {SHADES[base].map((shade, i) => (
+                <button
+                  key={shade}
+                  className={`quick-shade${current.toLowerCase() === shade ? " selected" : ""}`}
+                  style={{ background: shade }}
+                  title={`${["最浅", "浅", "标准", "深", "最深"][i]} ${shade}`}
+                  onClick={() => pick(shade)}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="quick-palette-row quick-custom">
+            <span className="quick-label">自定义</span>
+            <label className="quick-picker" title="打开取色器">
+              <span
+                className={`quick-current${current === "transparent" ? " transparent" : ""}`}
+                style={{ background: current === "transparent" ? undefined : current }}
+              />
+              <input
+                type="color"
+                value={HEX.test(current) ? current : "#000000"}
+                onChange={(e) => pick(e.target.value)}
+              />
+            </label>
+            <input
+              type="text"
+              className={`quick-hex${hexInvalid ? " invalid" : ""}`}
+              value={hexDraft ?? (current === "transparent" ? "" : current.toUpperCase())}
+              placeholder="#RRGGBB"
+              maxLength={7}
+              onChange={(e) => setHexDraft(e.target.value)}
+              onBlur={commitHex}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                // 回车后把焦点还给画布，快捷键才能继续用
+                if (e.key === "Enter") focusCanvas();
+              }}
+            />
             {panel === "backgroundColor" && (
               <button
-                className={`quick-swatch transparent${current === "transparent" ? " selected" : ""}`}
-                title="透明"
-                onClick={() => setColor("backgroundColor", "transparent")}
-              />
+                className={`quick-none${current === "transparent" ? " selected" : ""}`}
+                title="无填充"
+                onClick={() => pick("transparent")}
+              >
+                <span className="quick-current transparent" />
+                透明
+              </button>
             )}
-            {HUES.map((h, i) => (
-              <button
-                key={h.name}
-                className={`quick-swatch${i === hue ? " selected" : ""}`}
-                style={{ background: h.shades[DEFAULT_SHADE[panel]] }}
-                title={h.name}
-                onClick={() => {
-                  setHue(i);
-                  setColor(panel, h.shades[DEFAULT_SHADE[panel]]);
-                }}
-              />
-            ))}
           </div>
-          <div className="quick-shades">
-            {HUES[hue].shades.map((shade) => (
-              <button
-                key={shade}
-                className={`quick-swatch shade${current?.toLowerCase() === shade ? " selected" : ""}`}
-                style={{ background: shade }}
-                title={shade}
-                onClick={() => setColor(panel, shade)}
-              />
-            ))}
-            <input
-              type="color"
-              title="自定义颜色"
-              value={/^#[0-9a-f]{6}$/i.test(current ?? "") ? current! : "#000000"}
-              onChange={(e) => setColor(panel, e.target.value)}
-            />
-          </div>
+          {hexInvalid && <p className="field-error">请输入 6 位色号，例如 #FF8800</p>}
         </div>
       )}
     </div>

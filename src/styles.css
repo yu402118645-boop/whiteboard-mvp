@@ -698,44 +698,210 @@ body {
 }
 
 .quick-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: max-content;
+  max-width: 100%;
   margin-top: 6px;
-  padding-top: 6px;
+  padding: 10px 6px 4px;
   border-top: 1px solid #ececf2;
 }
 
-.quick-hues,
-.quick-shades {
+.quick-palette-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 
-.quick-shades {
-  margin-top: 6px;
+.quick-label {
+  flex: none;
+  width: 40px;
+  color: #868e96;
+  font-size: 12px;
+}
+
+/* 常用色：圆形色块 */
+.quick-swatches {
+  display: grid;
+  grid-template-columns: repeat(8, 22px);
+  gap: 8px;
 }
 
 .quick-swatch {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  border: 1px solid #d0d0dc;
-  border-radius: 6px;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
   cursor: pointer;
+  transition: transform 0.1s;
+}
+
+.quick-swatch:hover {
+  transform: scale(1.15);
 }
 
 .quick-swatch.selected {
-  outline: 2px solid #6965db;
-  outline-offset: 1px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 0 0 2px #fff, 0 0 0 4px #6965db;
 }
 
-.quick-shades input[type="color"] {
-  width: 28px;
-  height: 26px;
+/* 当前颜色是它的某一级深浅时，用浅一些的圈提示所属色系 */
+.quick-swatch.related {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12), 0 0 0 2px #fff, 0 0 0 4px #c5c3f5;
+}
+
+/* 深浅：连成一条的色带，和圆形常用色区分开 */
+.quick-shades {
+  display: flex;
+  width: calc(22px * 8 + 8px * 7);
+  height: 24px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.quick-shade {
+  position: relative;
+  flex: 1;
   padding: 0;
   border: 0;
-  background: none;
   cursor: pointer;
+}
+
+.quick-shade:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.quick-shade:last-child {
+  border-radius: 0 6px 6px 0;
+}
+
+.quick-shade:hover {
+  z-index: 1;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3px #adb5bd;
+}
+
+.quick-shade.selected {
+  z-index: 2;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px #6965db;
+}
+
+/* 自定义：当前颜色预览 + 色号输入 */
+.quick-custom {
+  gap: 8px;
+}
+
+.quick-picker {
+  position: relative;
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
+  cursor: pointer;
+}
+
+.quick-picker input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.quick-current {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+.quick-current.transparent {
+  border: 1px solid #d0d0dc;
+  background: repeating-conic-gradient(#ddd 0% 25%, #fff 0% 50%) 50% / 8px 8px;
+}
+
+.quick-hex {
+  width: 84px;
+  padding: 4px 6px;
+  border: 1px solid #d0d0dc;
+  border-radius: 6px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.quick-hex.invalid {
+  border-color: #e03131;
+  outline-color: #e03131;
+}
+
+.quick-none {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  border: 1px solid #d0d0dc;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.quick-none .quick-current {
+  width: 18px;
+  height: 18px;
+}
+
+.quick-none.selected {
+  border-color: #6965db;
+  color: #6965db;
+}
+
+/* 字号：输入框 + 常用字号列表 */
+.quick-font-box {
+  position: relative;
+}
+
+.quick-font-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1;
+  width: 64px;
+  max-height: 240px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.quick-font-list.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.quick-font-list li {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.quick-font-list li:hover {
+  background: #f1f0ff;
+}
+
+.quick-font-list li.selected {
+  background: #e0dfff;
+  color: #4c46c9;
+  font-weight: 600;
 }
 
 .quick-toolbar .field-error {
