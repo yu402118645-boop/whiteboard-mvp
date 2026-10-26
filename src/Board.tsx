@@ -61,10 +61,14 @@ function saveCache(boardId: string, elements: readonly ExcalidrawElement[]): voi
 
 // 把绘制过程中的高频变化合并后再发送，控制免费额度内的消息数量
 const SEND_THROTTLE_MS = 80;
-// 鼠标位置每秒最多发 5 次：光标会有点跳，但消息量只有不限速时的几分之一
-const POINTER_THROTTLE_MS = 150;
-// 被人跟随时，自己的视野范围最多这么久发一次（只在拖动、缩放画布时发）
-const VIEWPORT_THROTTLE_MS = 150;
+// 鼠标位置的发送间隔按在线人数调整：人少时每秒 10 次更顺滑；
+// 6 人及以上降到每秒约 6.7 次，保证 8 人连续用一整天也不超出免费额度
+const POINTER_FAST_MS = 100;
+const POINTER_SLOW_MS = 150;
+const POINTER_FAST_MAX_PEOPLE = 5;
+const pointerInterval = (online: number) => (online <= POINTER_FAST_MAX_PEOPLE ? POINTER_FAST_MS : POINTER_SLOW_MS);
+// 被人跟随时，自己的视野范围最多这么久发一次（只在拖动、缩放画布时发）；跟随方用同样时长做平滑过渡
+const VIEWPORT_THROTTLE_MS = 100;
 const CACHE_THROTTLE_MS = 1000;
 const FILE_RETRY_MS = 2000;
 const FILE_MAX_RETRIES = 15;
@@ -140,6 +144,11 @@ export function Board({ boardId }: { boardId: string }) {
   // 别人的光标每 150 毫秒才收到一次，中间用动画平滑过渡，看起来不跳（不增加任何流量）
   const pointerAnims = useRef(new Map<SocketId, { from: { x: number; y: number }; to: { x: number; y: number }; start: number }>());
   const pointerFrame = useRef<number | undefined>(undefined);
+  const online = useRef(1);
+  const lastPointerSent = useRef(0);
+  // 跟随别人时，视野从当前位置平滑移动到对方的位置
+  const viewAnim = useRef<{ from: ViewportBounds; to: ViewportBounds; start: number } | null>(null);
+  const viewFrame = useRef<number | undefined>(undefined);
   // 跟随视角：我正在跟随谁、谁在跟随我
   const following = useRef<string | null>(null);
   const followers = useRef(new Set<string>());
@@ -236,7 +245,7 @@ export function Board({ boardId }: { boardId: string }) {
       const dx = anim.to.x - anim.from.x;
       const dy = anim.to.y - anim.from.y;
       // 距离太远（比如对方跳到画布另一头）就直接过去，不要慢慢滑
-      const t = Math.hypot(dx, dy) > 3000 ? 1 : Math.min(1, (now - anim.start) / POINTER_THROTTLE_MS);
+      const t = Math.hypot(dx, dy) > 3000 ? 1 : Math.min(1, (now - anim.start) / pointerInterval(online.current));
       collaborators.current.set(id, {
         ...collaborator,
         pointer: { ...collaborator.pointer, x: anim.from.x + dx * t, y: anim.from.y + dy * t },
@@ -246,6 +255,26 @@ export function Board({ boardId }: { boardId: string }) {
     updateCollaborators();
     pointerFrame.current = pointerAnims.current.size > 0 ? requestAnimationFrame(animatePointers) : undefined;
   }, [updateCollaborators]);
+
+  const animateView = useCallback(() => {
+    const anim = viewAnim.current;
+    // 自己拖动画布会退出跟随，这时停止动画
+    if (!api || !anim || following.current === null) {
+      viewAnim.current = null;
+      viewFrame.current = undefined;
+      return;
+    }
+    const t = Math.min(1, (performance.now() - anim.start) / VIEWPORT_THROTTLE_MS);
+    const bounds = anim.from.map((v, i) => v + (anim.to[i] - v) * t) as ViewportBounds;
+    const { appState } = zoomToFitBounds({ bounds, appState: api.getAppState(), fitToViewport: true, viewportZoomFactor: 1 });
+    api.updateScene({ appState: { scrollX: appState.scrollX, scrollY: appState.scrollY, zoom: appState.zoom } });
+    if (t < 1) {
+      viewFrame.current = requestAnimationFrame(animateView);
+    } else {
+      viewAnim.current = null;
+      viewFrame.current = undefined;
+    }
+  }, [api]);
 
   /** 有人跟随我时，把我当前的可视范围发出去；范围没变就不发 */
   const sendViewport = useCallback(() => {
@@ -290,6 +319,7 @@ export function Board({ boardId }: { boardId: string }) {
           next.set(id, { ...collaborators.current.get(id), id: user.cid, socketId: id, username: user.name });
         }
         collaborators.current = next;
+        online.current = users.length;
         // 谁在跟随我：有新的人开始跟随时，马上把当前视野发过去
         const nextFollowers = new Set(users.filter((u) => u.following === clientId).map((u) => u.cid));
         const gained = [...nextFollowers].some((cid) => !followers.current.has(cid));
@@ -321,8 +351,11 @@ export function Board({ boardId }: { boardId: string }) {
       },
       onViewport(cid, bounds) {
         if (cid !== following.current || !api) return;
-        const { appState } = zoomToFitBounds({ bounds, appState: api.getAppState(), fitToViewport: true, viewportZoomFactor: 1 });
-        api.updateScene({ appState: { scrollX: appState.scrollX, scrollY: appState.scrollY, zoom: appState.zoom } });
+        // 从当前看到的范围出发，在一个发送间隔内滑到对方的范围；离得太远就直接跳过去
+        const current = getVisibleSceneBounds(api.getAppState()) as ViewportBounds;
+        const far = Math.hypot(bounds[0] - current[0], bounds[1] - current[1]) > 5 * (current[2] - current[0]);
+        viewAnim.current = { from: far ? bounds : current, to: bounds, start: performance.now() };
+        if (viewFrame.current === undefined) viewFrame.current = requestAnimationFrame(animateView);
       },
       onBoardName: setBoardName,
       onStatus: setStatus,
@@ -336,8 +369,10 @@ export function Board({ boardId }: { boardId: string }) {
       window.clearTimeout(viewportTimer.current);
       if (pointerFrame.current !== undefined) cancelAnimationFrame(pointerFrame.current);
       pointerFrame.current = undefined;
+      if (viewFrame.current !== undefined) cancelAnimationFrame(viewFrame.current);
+      viewFrame.current = undefined;
     };
-  }, [api, boardId, applyRemote, flush, updateCollaborators, animatePointers, sendViewport]);
+  }, [api, boardId, applyRemote, flush, updateCollaborators, animatePointers, sendViewport, animateView]);
 
   const onChange = useCallback(
     (elements: readonly ExcalidrawElement[], appState: AppState, _files: BinaryFiles) => {
@@ -371,11 +406,14 @@ export function Board({ boardId }: { boardId: string }) {
     (payload: { pointer: { x: number; y: number; tool: "pointer" | "laser" }; button: "down" | "up" }) => {
       latestPointer.current = { ...payload.pointer, button: payload.button };
       if (pointerTimer.current !== undefined) return;
+      // 从上次发送算起，不是从这次移动算起，持续移动时才能真正达到设定的频率
+      const wait = Math.max(0, pointerInterval(online.current) - (performance.now() - lastPointerSent.current));
       pointerTimer.current = window.setTimeout(() => {
         pointerTimer.current = undefined;
+        lastPointerSent.current = performance.now();
         if (latestPointer.current) syncRef.current?.sendPointer(latestPointer.current);
         latestPointer.current = null;
-      }, POINTER_THROTTLE_MS);
+      }, wait);
     },
     [],
   );
